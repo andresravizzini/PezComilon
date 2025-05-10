@@ -11,7 +11,7 @@ let mouse = { x: 0, y: 0 };
 let player;
 let otherFish = [];
 let bubbles = [];
-let initialOtherFishCount = 25;
+let initialOtherFishCount = 18;
 let growthFactor = 0.25;
 let baseSpeed = 0.8;
 let animationId;
