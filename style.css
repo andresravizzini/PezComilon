@@ -1,0 +1,57 @@
+body {
+    display: flex;
+    flex-direction: column; /* Apila los elementos verticalmente */
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+    background-color: #003366; /* Un azul oscuro para empezar */
+    font-family: sans-serif;
+    color: white;
+    overflow: hidden; /* Evita barras de scroll si el canvas es grande */
+}
+
+h1 {
+    margin-bottom: 10px;
+    color: #f0f0f0;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+}
+
+canvas {
+    border: 3px solid #ffffff;
+    background-color: #0077cc; /* Azul más claro para el agua */
+    /* Podrías añadir una imagen de fondo aquí, pero dibujarla en canvas es mejor para rendimiento */
+    display: block; /* Evita espacio extra debajo del canvas */
+    box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+}
+
+/* Estilos para mensajes superpuestos (Game Over, Victoria) */
+.message-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 20px 40px;
+    border-radius: 10px;
+    text-align: center;
+    font-size: 2em;
+    z-index: 10; /* Asegura que esté sobre el canvas */
+}
+
+#restartButton {
+    top: 60%; /* Posiciona el botón debajo del mensaje */
+    font-size: 1em;
+    padding: 10px 20px;
+    cursor: pointer;
+    border: none;
+    background-color: #4CAF50;
+    color: white;
+    border-radius: 5px;
+    transition: background-color 0.3s ease;
+}
+
+#restartButton:hover {
+    background-color: #45a049;
+}
