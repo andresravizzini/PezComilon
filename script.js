@@ -10,6 +10,7 @@ let canvasHeight;
 let mouse = { x: 0, y: 0 };
 let player;
 let otherFish = [];
+let krill = [];
 let bubbles = [];
 let initialOtherFishCount = 25;
 let growthFactor = 0.50;
@@ -24,27 +25,53 @@ const levels = [
         description: 'Pocos peces y ninguno te persigue.',
         fishCount: 8,
         baseSpeed: 0.65,
-        allowPursuit: false
+        allowPursuit: false,
+        krill: {
+            initial: 12,
+            min: 6,
+            max: 14,
+            respawnInterval: 4500,
+            spawnBatch: 3,
+            nutritionFactor: 0.9
+        }
     },
     {
         name: 'Nivel 2',
         description: 'Más peces y se mueven un poco más rápido.',
         fishCount: 16,
         baseSpeed: 0.85,
-        allowPursuit: false
+        allowPursuit: false,
+        krill: {
+            initial: 10,
+            min: 5,
+            max: 12,
+            respawnInterval: 5000,
+            spawnBatch: 2,
+            nutritionFactor: 0.75
+        }
     },
     {
         name: 'Nivel 3',
         description: 'Muchos peces y los grandes te persiguen.',
         fishCount: 24,
         baseSpeed: 1.0,
-        allowPursuit: true
+        allowPursuit: true,
+        krill: {
+            initial: 8,
+            min: 4,
+            max: 10,
+            respawnInterval: 6000,
+            spawnBatch: 2,
+            nutritionFactor: 0.65
+        }
     }
 ];
 
 let currentLevelIndex = 0;
 let levelAllowsPursuit = true;
 let levelTransitionTimeout = null;
+let activeKrillConfig = null;
+let lastKrillSpawnTime = 0;
 const playerInitialSize = 15;
 
 // --- Constantes para IA y Movimiento ---
@@ -166,6 +193,62 @@ class Fish {
     }
 }
 
+class Krill {
+    constructor(x, y, size) {
+        this.x = x;
+        this.baseY = y;
+        this.size = size;
+        this.floatAmplitude = Math.random() * 8 + 6;
+        this.floatSpeed = Math.random() * 0.015 + 0.01;
+        this.floatPhase = Math.random() * Math.PI * 2;
+        this.driftSpeedX = (Math.random() - 0.5) * 0.1;
+        this.driftSpeedY = (Math.random() - 0.5) * 0.05;
+        this.hue = Math.random() * 40 + 180;
+        this.saturation = Math.random() * 20 + 60;
+        this.lightness = Math.random() * 20 + 70;
+        this.y = y;
+    }
+
+    update() {
+        this.floatPhase += this.floatSpeed;
+        const floatOffset = Math.sin(this.floatPhase) * this.floatAmplitude;
+        this.x += this.driftSpeedX;
+        this.baseY += this.driftSpeedY;
+
+        if (this.x < this.size) {
+            this.x = this.size;
+            this.driftSpeedX *= -1;
+        } else if (this.x > canvasWidth - this.size) {
+            this.x = canvasWidth - this.size;
+            this.driftSpeedX *= -1;
+        }
+
+        if (this.baseY < this.size) {
+            this.baseY = this.size;
+            this.driftSpeedY *= -1;
+        } else if (this.baseY > canvasHeight - this.size) {
+            this.baseY = canvasHeight - this.size;
+            this.driftSpeedY *= -1;
+        }
+
+        this.y = this.baseY + floatOffset;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, this.size, this.size * 0.6, 0, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, 0.85)`;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(-this.size * 0.3, 0, this.size * 0.5, this.size * 0.25, Math.PI / 6, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue + 20}, ${Math.min(100, this.saturation + 10)}%, ${Math.min(95, this.lightness + 5)}%, 0.6)`;
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
 class PlayerFish extends Fish {
     constructor(x, y, size, color) {
         super(x, y, size, color); // Llama al constructor de Fish
@@ -195,6 +278,64 @@ class PlayerFish extends Fish {
 
 function getRandomColor() { const h = Math.random()*360; const s = Math.random()*30+70; const l = Math.random()*20+60; return `hsl(${h}, ${s}%, ${l}%)`; }
 function getDistance(x1, y1, x2, y2) { let dx = x2-x1; let dy = y2-y1; return Math.sqrt(dx*dx + dy*dy); }
+
+function createKrillConfig(config = {}) {
+    return {
+        initial: Math.max(0, config.initial ?? 8),
+        min: Math.max(0, config.min ?? 4),
+        max: Math.max(config.max ?? 10, config.min ?? 4, config.initial ?? 8),
+        respawnInterval: Math.max(1000, config.respawnInterval ?? 5000),
+        spawnBatch: Math.max(1, config.spawnBatch ?? 2),
+        nutritionFactor: Math.max(0.1, config.nutritionFactor ?? 0.75)
+    };
+}
+
+function spawnKrill() {
+    if (!activeKrillConfig || !canvasWidth || !canvasHeight) return null;
+    if (krill.length >= activeKrillConfig.max) return null;
+    let attempts = 0;
+    while (attempts < 20) {
+        const size = Math.random() * 4 + 4;
+        const x = Math.random() * (canvasWidth - size * 4) + size * 2;
+        const y = Math.random() * (canvasHeight - size * 4) + size * 2;
+        const safeDistance = player ? player.size + size + 40 : size * 4;
+        const tooCloseToPlayer = player && getDistance(x, y, player.x, player.y) < safeDistance;
+        const tooCloseToFish = otherFish.some(fish => getDistance(x, y, fish.x, fish.y) < fish.size + size + 20);
+        if (!tooCloseToPlayer && !tooCloseToFish) {
+            const newKrill = new Krill(x, y, size);
+            krill.push(newKrill);
+            return newKrill;
+        }
+        attempts++;
+    }
+    return null;
+}
+
+function maintainKrillPopulation() {
+    if (!activeKrillConfig || gameState !== 'running') return;
+    if (krill.length < activeKrillConfig.min && krill.length < activeKrillConfig.max) {
+        const spawned = spawnKrill();
+        if (spawned) {
+            lastKrillSpawnTime = Date.now();
+        }
+        return;
+    }
+    if (krill.length >= activeKrillConfig.max) return;
+    const now = Date.now();
+    if (now - lastKrillSpawnTime >= activeKrillConfig.respawnInterval && otherFish.length > 0) {
+        const batch = Math.min(activeKrillConfig.spawnBatch, activeKrillConfig.max - krill.length);
+        let spawnedAny = false;
+        for (let i = 0; i < batch; i++) {
+            const spawned = spawnKrill();
+            if (spawned) {
+                spawnedAny = true;
+            }
+        }
+        if (spawnedAny) {
+            lastKrillSpawnTime = now;
+        }
+    }
+}
 
 // --- Función para redimensionar el canvas (MODIFICADA para margen inferior) ---
 function resizeCanvas() {
@@ -283,6 +424,9 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
     }
 
     otherFish = [];
+    krill = [];
+    activeKrillConfig = createKrillConfig(levelConfig.krill || {});
+    lastKrillSpawnTime = Date.now();
     for (let i = 0; i < initialOtherFishCount; i++) {
         let size = Math.random() * 35 + 5;
         let x = Math.random() * (canvasWidth - size * 2) + size;
@@ -295,6 +439,13 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
         }
     }
     console.log(`Created ${otherFish.length} NPC fish for ${levelConfig.name}.`);
+
+    if (activeKrillConfig.initial > 0) {
+        for (let i = 0; i < activeKrillConfig.initial && krill.length < activeKrillConfig.max; i++) {
+            spawnKrill();
+        }
+    }
+    console.log(`Created ${krill.length} krill.`);
 
     bubbles = [];
     for (let i = 0; i < numBubbles; i++) {
@@ -336,6 +487,16 @@ function handleLevelClear() {
 
 function checkCollisions() {
     if (!player) return;
+    if (activeKrillConfig) {
+        for (let i = krill.length - 1; i >= 0; i--) {
+            const item = krill[i];
+            const dist = getDistance(player.x, player.y, item.x, item.y);
+            if (dist < player.size + item.size * 0.6) {
+                player.grow(item.size * activeKrillConfig.nutritionFactor);
+                krill.splice(i, 1);
+            }
+        }
+    }
     for (let i = otherFish.length - 1; i >= 0; i--) {
         const fish = otherFish[i];
         const dist = getDistance(player.x, player.y, fish.x, fish.y);
@@ -362,12 +523,34 @@ function updateGame() {
     if (gameState !== 'running' || !player) return;
     tailAnimationCounter++; // Incrementar el contador para la animación de la cola
     bubbles.forEach(b => b.update());
+    krill.forEach(k => k.update());
+    maintainKrillPopulation();
     player.update();
     otherFish.forEach(f => f.update(player)); // Pasar player para la IA
     checkCollisions();
 }
 
-function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight ajustado ... */ if (!player) return; ctx.fillStyle = '#004070'; ctx.fillRect(0, 0, canvasWidth, canvasHeight); bubbles.forEach(b => b.draw()); otherFish.forEach(f => f.draw()); player.draw(); ctx.fillStyle = 'white'; ctx.font = '16px Arial'; ctx.fillText(`Tamaño: ${player.size.toFixed(1)}`, 10, 20); ctx.fillText(`Peces restantes: ${otherFish.length}`, 10, 40); const levelInfo = levels[currentLevelIndex]; if (levelInfo) { ctx.fillText(`Nivel: ${levelInfo.name}`, 10, 60); } }
+function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight ajustado ... */
+    if (!player) return;
+    ctx.fillStyle = '#004070';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    bubbles.forEach(b => b.draw());
+    krill.forEach(k => k.draw());
+    otherFish.forEach(f => f.draw());
+    player.draw();
+    ctx.fillStyle = 'white';
+    ctx.font = '16px Arial';
+    ctx.fillText(`Tamaño: ${player.size.toFixed(1)}`, 10, 20);
+    ctx.fillText(`Peces restantes: ${otherFish.length}`, 10, 40);
+    if (activeKrillConfig) {
+        ctx.fillText(`Krill disponibles: ${krill.length}`, 10, 60);
+    }
+    const levelInfo = levels[currentLevelIndex];
+    if (levelInfo) {
+        const levelTextY = activeKrillConfig ? 80 : 60;
+        ctx.fillText(`Nivel: ${levelInfo.name}`, 10, levelTextY);
+    }
+}
 function gameLoop() { /* ... sin cambios ... */ if (gameState !== 'running') { if (animationId) { cancelAnimationFrame(animationId); animationId = null; } return; } updateGame(); drawGame(); animationId = requestAnimationFrame(gameLoop); }
 function gameOver() { /* ... sin cambios ... */ console.log("Game Over!"); clearLevelTransitionTimer(); gameState = 'gameOver'; messageEl.textContent = '¡HAS SIDO COMIDO! GAME OVER'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
 function winGame() { /* ... sin cambios ... */ console.log("You Win!"); clearLevelTransitionTimer(); gameState = 'win'; messageEl.textContent = '¡FELICIDADES! ¡TE LOS COMISTE A TODOS!'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
