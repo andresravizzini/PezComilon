@@ -171,13 +171,19 @@ function startBackgroundMusic() {
     if (backgroundMusicPlaying) return;
 
     musicGainNode = ctx.createGain();
-    musicGainNode.gain.value = 0.16;
+    musicGainNode.gain.value = 0.2;
     musicGainNode.connect(masterGainNode);
 
+    const root = 196; // G3
+    const majorThird = root * Math.pow(2, 4 / 12);
+    const perfectFifth = root * Math.pow(2, 7 / 12);
+    const majorSixth = root * Math.pow(2, 9 / 12);
+
     const padConfigs = [
-        { frequency: 140, type: 'sine', lfoFreq: 0.08, lfoDepth: 18, gain: 0.25 },
-        { frequency: 210, type: 'triangle', lfoFreq: 0.12, lfoDepth: 14, gain: 0.18 },
-        { frequency: 95, type: 'sine', lfoFreq: 0.05, lfoDepth: 9, gain: 0.22 }
+        { frequency: root, type: 'triangle', lfoFreq: 0.18, lfoDepth: 6.5, gain: 0.28 },
+        { frequency: majorThird, type: 'sawtooth', lfoFreq: 0.24, lfoDepth: 5.2, gain: 0.2 },
+        { frequency: perfectFifth, type: 'triangle', lfoFreq: 0.16, lfoDepth: 4.6, gain: 0.22 },
+        { frequency: majorSixth, type: 'sine', lfoFreq: 0.21, lfoDepth: 5.8, gain: 0.16 }
     ];
 
     padConfigs.forEach(({ frequency, type, lfoFreq, lfoDepth, gain }) => {
@@ -203,8 +209,8 @@ function startBackgroundMusic() {
 
         const ampLfo = ctx.createOscillator();
         const ampGain = ctx.createGain();
-        ampLfo.frequency.value = lfoFreq * 1.5;
-        ampGain.gain.value = gain * 0.6;
+        ampLfo.frequency.value = lfoFreq * 1.3;
+        ampGain.gain.value = gain * 0.7;
         ampLfo.connect(ampGain);
         ampGain.connect(voiceGain.gain);
         ampLfo.start();
@@ -214,6 +220,30 @@ function startBackgroundMusic() {
         activeMusicVoices.push(osc, voiceGain);
     });
 
+    const beatGain = ctx.createGain();
+    beatGain.gain.value = 0;
+    beatGain.connect(musicGainNode);
+
+    const beatOsc = ctx.createOscillator();
+    beatOsc.type = 'square';
+    beatOsc.frequency.value = root * 2;
+    beatOsc.connect(beatGain);
+    beatOsc.start();
+    activeMusicVoices.push(beatOsc, beatGain);
+
+    const now = ctx.currentTime;
+    const beatSpacing = 0.7;
+    const totalBeats = 360;
+    const beatNotes = [root * 2, majorThird * 2, perfectFifth * 2.1, majorSixth * 2];
+    for (let i = 0; i < totalBeats; i++) {
+        const time = now + i * beatSpacing;
+        const note = beatNotes[i % beatNotes.length];
+        beatOsc.frequency.setValueAtTime(note, time);
+        beatGain.gain.setValueAtTime(0.0001, time);
+        beatGain.gain.linearRampToValueAtTime(0.14, time + 0.03);
+        beatGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.28);
+    }
+
     backgroundMusicPlaying = true;
 }
 
@@ -221,15 +251,19 @@ function playCrunchSound() {
     const ctx = resumeAudioContext();
     if (!ctx) return;
 
-    const duration = 0.28;
+    const duration = 0.34;
     const sampleRate = ctx.sampleRate;
     const frameCount = Math.floor(sampleRate * duration);
     const buffer = ctx.createBuffer(1, frameCount, sampleRate);
     const data = buffer.getChannelData(0);
+    let hold = 0;
     for (let i = 0; i < frameCount; i++) {
+        if (i % 3 === 0) {
+            hold = (Math.random() * 2 - 1) * 0.85;
+        }
         const progress = i / frameCount;
-        const decay = Math.pow(1 - progress, 2.2);
-        data[i] = (Math.random() * 2 - 1) * decay;
+        const decay = Math.pow(1 - progress, 2.4);
+        data[i] = hold * decay;
     }
 
     const noiseSource = ctx.createBufferSource();
@@ -237,29 +271,43 @@ function playCrunchSound() {
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.value = 850;
-    filter.Q.value = 1.5;
+    filter.frequency.value = 260;
+    filter.Q.value = 1.1;
 
     const crunchGain = ctx.createGain();
-    crunchGain.gain.value = 0.45;
+    crunchGain.gain.setValueAtTime(0.6, ctx.currentTime);
+    crunchGain.gain.exponentialRampToValueAtTime(0.002, ctx.currentTime + duration);
 
     noiseSource.connect(filter);
     filter.connect(crunchGain);
     crunchGain.connect(masterGainNode);
 
-    const biteOsc = ctx.createOscillator();
-    biteOsc.type = 'sawtooth';
-    biteOsc.frequency.value = 420;
-    const biteGain = ctx.createGain();
-    biteGain.gain.setValueAtTime(0.18, ctx.currentTime);
-    biteGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-    biteOsc.connect(biteGain);
-    biteGain.connect(masterGainNode);
+    const thumpOsc = ctx.createOscillator();
+    thumpOsc.type = 'triangle';
+    thumpOsc.frequency.setValueAtTime(90, ctx.currentTime);
+    thumpOsc.frequency.exponentialRampToValueAtTime(42, ctx.currentTime + duration);
+    const thumpGain = ctx.createGain();
+    thumpGain.gain.setValueAtTime(0.26, ctx.currentTime);
+    thumpGain.gain.exponentialRampToValueAtTime(0.002, ctx.currentTime + duration * 0.9);
+    thumpOsc.connect(thumpGain);
+    thumpGain.connect(masterGainNode);
+
+    const crackOsc = ctx.createOscillator();
+    crackOsc.type = 'square';
+    crackOsc.frequency.setValueAtTime(210, ctx.currentTime);
+    crackOsc.frequency.linearRampToValueAtTime(120, ctx.currentTime + duration);
+    const crackGain = ctx.createGain();
+    crackGain.gain.setValueAtTime(0.14, ctx.currentTime);
+    crackGain.gain.exponentialRampToValueAtTime(0.002, ctx.currentTime + duration * 0.7);
+    crackOsc.connect(crackGain);
+    crackGain.connect(masterGainNode);
 
     noiseSource.start();
-    biteOsc.start();
+    thumpOsc.start();
+    crackOsc.start();
     noiseSource.stop(ctx.currentTime + duration);
-    biteOsc.stop(ctx.currentTime + duration);
+    thumpOsc.stop(ctx.currentTime + duration);
+    crackOsc.stop(ctx.currentTime + duration);
 }
 
 function handleUserAudioUnlock() {
@@ -678,21 +726,16 @@ class PlayerFish extends Fish {
         if (mouthAngle > 0.01) {
             const rx = this.size;
             const ry = this.size * 0.6;
+
+            ctx.save();
+            ctx.globalCompositeOperation = 'destination-out';
             ctx.beginPath();
             ctx.moveTo(0, 0);
             ctx.lineTo(Math.cos(mouthAngle) * rx, Math.sin(mouthAngle) * ry);
-            ctx.lineTo(Math.cos(-mouthAngle) * rx, Math.sin(-mouthAngle) * ry);
+            ctx.ellipse(0, 0, rx, ry, 0, mouthAngle, -mouthAngle, true);
             ctx.closePath();
-            ctx.fillStyle = '#002d4e';
             ctx.fill();
-
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(Math.cos(mouthAngle * 0.65) * (rx * 0.95), Math.sin(mouthAngle * 0.65) * (ry * 0.95));
-            ctx.lineTo(Math.cos(-mouthAngle * 0.65) * (rx * 0.95), Math.sin(-mouthAngle * 0.65) * (ry * 0.95));
-            ctx.closePath();
-            ctx.fillStyle = '#004f7c';
-            ctx.fill();
+            ctx.restore();
         } else {
             ctx.beginPath();
             ctx.moveTo(this.size * 0.5, this.size * 0.08);
