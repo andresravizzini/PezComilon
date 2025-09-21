@@ -109,6 +109,13 @@ let bossShark = null;
 let activeMineConfig = null;
 let lastMineSpawnTime = 0;
 
+// --- Audio ---
+let audioContext = null;
+let masterGainNode = null;
+let musicGainNode = null;
+let backgroundMusicPlaying = false;
+const activeMusicVoices = [];
+
 // --- Constantes para IA y Movimiento ---
 const visionRadius = 160;
 const fleeMargin = 1;
@@ -132,6 +139,135 @@ const bottomMargin = 200; // Píxeles a dejar en la parte inferior
 let tailAnimationCounter = 0; // Contador global para sincronizar animación o individual por pez
 const tailAnimationSpeed = 0.2; // Cuán rápido se mueve la cola
 const tailMaxAngleOffset = Math.PI / 18; // Máximo ángulo de desviación de la cola (10 grados)
+
+
+// --- Audio helpers ---
+function ensureAudioContext() {
+    if (typeof window === 'undefined') return null;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!audioContext) {
+        audioContext = new AudioCtx();
+        masterGainNode = audioContext.createGain();
+        masterGainNode.gain.value = 0.8;
+        masterGainNode.connect(audioContext.destination);
+    }
+    return audioContext;
+}
+
+function resumeAudioContext() {
+    const ctx = ensureAudioContext();
+    if (!ctx) return null;
+    if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+    }
+    return ctx;
+}
+
+function startBackgroundMusic() {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    resumeAudioContext();
+    if (backgroundMusicPlaying) return;
+
+    musicGainNode = ctx.createGain();
+    musicGainNode.gain.value = 0.16;
+    musicGainNode.connect(masterGainNode);
+
+    const padConfigs = [
+        { frequency: 140, type: 'sine', lfoFreq: 0.08, lfoDepth: 18, gain: 0.25 },
+        { frequency: 210, type: 'triangle', lfoFreq: 0.12, lfoDepth: 14, gain: 0.18 },
+        { frequency: 95, type: 'sine', lfoFreq: 0.05, lfoDepth: 9, gain: 0.22 }
+    ];
+
+    padConfigs.forEach(({ frequency, type, lfoFreq, lfoDepth, gain }) => {
+        const osc = ctx.createOscillator();
+        osc.type = type;
+        osc.frequency.value = frequency;
+
+        const voiceGain = ctx.createGain();
+        voiceGain.gain.value = gain;
+        osc.connect(voiceGain);
+        voiceGain.connect(musicGainNode);
+
+        if (lfoDepth > 0) {
+            const lfo = ctx.createOscillator();
+            const lfoGain = ctx.createGain();
+            lfo.frequency.value = lfoFreq;
+            lfoGain.gain.value = lfoDepth;
+            lfo.connect(lfoGain);
+            lfoGain.connect(osc.frequency);
+            lfo.start();
+            activeMusicVoices.push(lfo);
+        }
+
+        const ampLfo = ctx.createOscillator();
+        const ampGain = ctx.createGain();
+        ampLfo.frequency.value = lfoFreq * 1.5;
+        ampGain.gain.value = gain * 0.6;
+        ampLfo.connect(ampGain);
+        ampGain.connect(voiceGain.gain);
+        ampLfo.start();
+        activeMusicVoices.push(ampLfo);
+
+        osc.start();
+        activeMusicVoices.push(osc, voiceGain);
+    });
+
+    backgroundMusicPlaying = true;
+}
+
+function playCrunchSound() {
+    const ctx = resumeAudioContext();
+    if (!ctx) return;
+
+    const duration = 0.28;
+    const sampleRate = ctx.sampleRate;
+    const frameCount = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, frameCount, sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frameCount; i++) {
+        const progress = i / frameCount;
+        const decay = Math.pow(1 - progress, 2.2);
+        data[i] = (Math.random() * 2 - 1) * decay;
+    }
+
+    const noiseSource = ctx.createBufferSource();
+    noiseSource.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 850;
+    filter.Q.value = 1.5;
+
+    const crunchGain = ctx.createGain();
+    crunchGain.gain.value = 0.45;
+
+    noiseSource.connect(filter);
+    filter.connect(crunchGain);
+    crunchGain.connect(masterGainNode);
+
+    const biteOsc = ctx.createOscillator();
+    biteOsc.type = 'sawtooth';
+    biteOsc.frequency.value = 420;
+    const biteGain = ctx.createGain();
+    biteGain.gain.setValueAtTime(0.18, ctx.currentTime);
+    biteGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    biteOsc.connect(biteGain);
+    biteGain.connect(masterGainNode);
+
+    noiseSource.start();
+    biteOsc.start();
+    noiseSource.stop(ctx.currentTime + duration);
+    biteOsc.stop(ctx.currentTime + duration);
+}
+
+function handleUserAudioUnlock() {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    resumeAudioContext();
+    startBackgroundMusic();
+}
 
 
 // --- Clases y Objetos del Juego ---
@@ -489,29 +625,125 @@ class Jellyfish {
 
 class PlayerFish extends Fish {
     constructor(x, y, size, color) {
-        super(x, y, size, color); // Llama al constructor de Fish
+        super(x, y, size, color);
         this.targetX = x;
         this.targetY = y;
         this.lerpFactor = 0.08;
+        this.mouthOpenUntil = 0;
+        this.mouthOpenDuration = 240;
     }
-    update() { // Sobrescribe el update de Fish para el movimiento del jugador
+
+    update() {
         let dxT = this.targetX - this.x;
         let dyT = this.targetY - this.y;
         this.x += dxT * this.lerpFactor;
         this.y += dyT * this.lerpFactor;
         this.x = Math.max(this.size * 0.6, Math.min(canvasWidth - this.size * 0.6, this.x));
-        this.y = Math.max(this.size * 0.6, Math.min(canvasHeight - this.size * 0.6, this.y)); // Usa canvasHeight global
+        this.y = Math.max(this.size * 0.6, Math.min(canvasHeight - this.size * 0.6, this.y));
 
-        // Actualizar ángulo del jugador para que mire hacia donde se mueve
-        if (Math.abs(dxT) > 0.1 || Math.abs(dyT) > 0.1) { // Solo si hay movimiento significativo
+        if (Math.abs(dxT) > 0.1 || Math.abs(dyT) > 0.1) {
             this.angle = Math.atan2(dyT, dxT);
         }
+
+        if (this.mouthOpenUntil && Date.now() > this.mouthOpenUntil) {
+            this.mouthOpenUntil = 0;
+        }
     }
-    grow(eatenFishSize) { let cArea = Math.PI*this.size*this.size; let eArea = Math.PI*eatenFishSize*eatenFishSize; let nArea = cArea + eArea * growthFactor; this.size = Math.sqrt(nArea / Math.PI); console.log(`Player grew to size: ${this.size.toFixed(2)}`); }
-    setTarget(x, y) { this.targetX = x; this.targetY = y; }
-    // PlayerFish usará el método draw() heredado de Fish, que ahora incluye la animación de cola.
-    // Si quieres que el PlayerFish tenga una animación de cola diferente o un control de ángulo diferente
-    // para la cola, podrías sobrescribir draw() aquí también. Por ahora, hereda.
+
+    triggerMouthOpen(duration = 260) {
+        this.mouthOpenDuration = duration;
+        this.mouthOpenUntil = Date.now() + duration;
+    }
+
+    getMouthAngle() {
+        if (!this.mouthOpenUntil) return 0;
+        const remaining = this.mouthOpenUntil - Date.now();
+        if (remaining <= 0) return 0;
+        const normalized = Math.min(1, Math.max(0, remaining / this.mouthOpenDuration));
+        return (Math.PI / 2.8) * normalized;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+
+        const mouthAngle = this.getMouthAngle();
+
+        ctx.beginPath();
+        ctx.ellipse(0, 0, this.size, this.size * 0.6, 0, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+
+        if (mouthAngle > 0.01) {
+            const rx = this.size;
+            const ry = this.size * 0.6;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.cos(mouthAngle) * rx, Math.sin(mouthAngle) * ry);
+            ctx.lineTo(Math.cos(-mouthAngle) * rx, Math.sin(-mouthAngle) * ry);
+            ctx.closePath();
+            ctx.fillStyle = '#002d4e';
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.cos(mouthAngle * 0.65) * (rx * 0.95), Math.sin(mouthAngle * 0.65) * (ry * 0.95));
+            ctx.lineTo(Math.cos(-mouthAngle * 0.65) * (rx * 0.95), Math.sin(-mouthAngle * 0.65) * (ry * 0.95));
+            ctx.closePath();
+            ctx.fillStyle = '#004f7c';
+            ctx.fill();
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(this.size * 0.5, this.size * 0.08);
+            ctx.lineTo(this.size * 0.55, this.size * 0.16);
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.lineWidth = Math.max(1, this.size * 0.05);
+            ctx.stroke();
+        }
+
+        this.tailAngleOffset = Math.sin(this.tailAnimationPhase + tailAnimationCounter * tailAnimationSpeed) * tailMaxAngleOffset;
+        ctx.save();
+        ctx.rotate(this.tailAngleOffset);
+        ctx.beginPath();
+        ctx.moveTo(-this.size * 0.6, 0);
+        ctx.lineTo(-this.size * 1.2, -this.size * 0.35);
+        ctx.lineTo(-this.size * 1.2, this.size * 0.35);
+        ctx.closePath();
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        ctx.restore();
+
+        const eyeX = this.size * 0.4;
+        const eyeY = -this.size * 0.15;
+        const eyeRadius = this.size * 0.12;
+        const pupilRadius = eyeRadius * 0.6;
+        ctx.beginPath();
+        ctx.arc(eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(eyeX, eyeY, pupilRadius, 0, Math.PI * 2);
+        ctx.fillStyle = 'black';
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    grow(eatenFishSize) {
+        let cArea = Math.PI * this.size * this.size;
+        let eArea = Math.PI * eatenFishSize * eatenFishSize;
+        let nArea = cArea + eArea * growthFactor;
+        this.size = Math.sqrt(nArea / Math.PI);
+        this.triggerMouthOpen();
+        playCrunchSound();
+        console.log(`Player grew to size: ${this.size.toFixed(2)}`);
+    }
+
+    setTarget(x, y) {
+        this.targetX = x;
+        this.targetY = y;
+    }
 }
 
 function getRandomColor() { const h = Math.random()*360; const s = Math.random()*30+70; const l = Math.random()*20+60; return `hsl(${h}, ${s}%, ${l}%)`; }
@@ -934,6 +1166,7 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
     messageEl.style.display = 'none';
     restartButton.style.display = 'none';
 
+    startBackgroundMusic();
     gameLoop();
     showTemporaryMessage(`${levelConfig.name}: ${levelConfig.description}`);
 }
@@ -995,6 +1228,7 @@ function startBossBattle() {
     messageEl.style.display = 'none';
     restartButton.style.display = 'none';
 
+    startBackgroundMusic();
     gameLoop();
     showTemporaryMessage(`${bossLevel.name}: ${bossLevel.description}. ¡Haz que las minas exploten cerca del tiburón!`, 4200);
 }
@@ -1228,10 +1462,84 @@ function winGame(customMessage) { /* ... sin cambios ... */ console.log("You Win
 window.addEventListener('resize', () => { if (animationId) { cancelAnimationFrame(animationId); animationId = null; } resizeCanvas(); });
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 let touchIdentifier = null;
-if (isTouchDevice) { /* ... sin cambios ... */ console.log("Touch device detected. Using touch controls."); canvas.addEventListener('touchstart', (event) => { if (gameState !== 'running' || !player) return; event.preventDefault(); if (touchIdentifier === null && event.changedTouches.length > 0) { touchIdentifier = event.changedTouches[0].identifier; const rect = canvas.getBoundingClientRect(); const touch = event.changedTouches[0]; mouse.x = touch.clientX - rect.left; mouse.y = touch.clientY - rect.top; player.setTarget(mouse.x, mouse.y); } }, { passive: false }); canvas.addEventListener('touchmove', (event) => { if (gameState !== 'running' || !player) return; event.preventDefault(); for (let i = 0; i < event.changedTouches.length; i++) { const touch = event.changedTouches[i]; if (touch.identifier === touchIdentifier) { const rect = canvas.getBoundingClientRect(); mouse.x = touch.clientX - rect.left; mouse.y = touch.clientY - rect.top; player.setTarget(mouse.x, mouse.y); break; } } }, { passive: false }); const touchEndOrCancel = (event) => { if (gameState !== 'running' || !player) return; for (let i = 0; i < event.changedTouches.length; i++) { const touch = event.changedTouches[i]; if (touch.identifier === touchIdentifier) { touchIdentifier = null; break; } } }; canvas.addEventListener('touchend', touchEndOrCancel); canvas.addEventListener('touchcancel', touchEndOrCancel);
-} else { /* ... sin cambios ... */ console.log("Desktop device detected. Using mouse controls."); canvas.addEventListener('mousemove', (event) => { if (gameState !== 'running' || !player) return; const rect = canvas.getBoundingClientRect(); mouse.x = event.clientX - rect.left; mouse.y = event.clientY - rect.top; player.setTarget(mouse.x, mouse.y); });
+if (isTouchDevice) {
+    console.log("Touch device detected. Using touch controls.");
+    canvas.addEventListener('touchstart', (event) => {
+        handleUserAudioUnlock();
+        if (gameState !== 'running' || !player) return;
+        event.preventDefault();
+        if (touchIdentifier === null && event.changedTouches.length > 0) {
+            touchIdentifier = event.changedTouches[0].identifier;
+            const rect = canvas.getBoundingClientRect();
+            const touch = event.changedTouches[0];
+            mouse.x = touch.clientX - rect.left;
+            mouse.y = touch.clientY - rect.top;
+            player.setTarget(mouse.x, mouse.y);
+        }
+    }, { passive: false });
+    canvas.addEventListener('touchmove', (event) => {
+        if (gameState !== 'running' || !player) return;
+        event.preventDefault();
+        for (let i = 0; i < event.changedTouches.length; i++) {
+            const touch = event.changedTouches[i];
+            if (touch.identifier === touchIdentifier) {
+                const rect = canvas.getBoundingClientRect();
+                mouse.x = touch.clientX - rect.left;
+                mouse.y = touch.clientY - rect.top;
+                player.setTarget(mouse.x, mouse.y);
+                break;
+            }
+        }
+    }, { passive: false });
+    const touchEndOrCancel = (event) => {
+        if (gameState !== 'running' || !player) return;
+        for (let i = 0; i < event.changedTouches.length; i++) {
+            const touch = event.changedTouches[i];
+            if (touch.identifier === touchIdentifier) {
+                touchIdentifier = null;
+                break;
+            }
+        }
+    };
+    canvas.addEventListener('touchend', touchEndOrCancel);
+    canvas.addEventListener('touchcancel', touchEndOrCancel);
+} else {
+    console.log("Desktop device detected. Using mouse controls.");
+    canvas.addEventListener('mousemove', (event) => {
+        handleUserAudioUnlock();
+        if (gameState !== 'running' || !player) return;
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = event.clientX - rect.left;
+        mouse.y = event.clientY - rect.top;
+        player.setTarget(mouse.x, mouse.y);
+    });
+    canvas.addEventListener('mousedown', (event) => {
+        handleUserAudioUnlock();
+        if (gameState !== 'running' || !player) return;
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = event.clientX - rect.left;
+        mouse.y = event.clientY - rect.top;
+        player.setTarget(mouse.x, mouse.y);
+    });
 }
-restartButton.addEventListener('click', () => { resizeCanvas(); });
+restartButton.addEventListener('click', () => { handleUserAudioUnlock(); resizeCanvas(); });
+
+window.addEventListener('keydown', (event) => {
+    if (!['1', '2', '3'].includes(event.key)) {
+        return;
+    }
+    handleUserAudioUnlock();
+    event.preventDefault();
+
+    if (event.key === '1') {
+        startLevel(0, { resetPlayer: true, resetPlayerSize: true });
+    } else if (event.key === '2') {
+        const targetIndex = Math.max(0, Math.min(1, levels.length - 1));
+        startLevel(targetIndex, { resetPlayer: true, resetPlayerSize: true });
+    } else if (event.key === '3') {
+        startBossBattle();
+    }
+});
 
 // --- Inicio ---
 resizeCanvas();
