@@ -73,12 +73,24 @@ const levels = [
     }
 ];
 
+const bossLevel = {
+    name: 'Nivel Final',
+    description: 'Duelo 1 vs 1 contra el tiburón jefe.',
+    playerSize: 55,
+    sharkSize: 50,
+    baseSpeed: 1.0,
+    sharkSpeedMultiplier: 1.25,
+    biteRangeFactor: 0.5
+};
+
 let currentLevelIndex = 0;
 let levelAllowsPursuit = true;
 let levelTransitionTimeout = null;
 let activeKrillConfig = null;
 let lastKrillSpawnTime = 0;
 const playerInitialSize = 15;
+let bossBattleActive = false;
+let bossShark = null;
 
 // --- Constantes para IA y Movimiento ---
 const visionRadius = 160;
@@ -199,6 +211,103 @@ class Fish {
     }
 }
 
+class Shark extends Fish {
+    constructor(x, y, size, color, speedMultiplier = 1.2) {
+        super(x, y, size, color, speedMultiplier);
+        this.baseSpeed = baseSpeed * speedMultiplier;
+        this.turnRate = turnSpeedFleePursue * 1.1;
+        this.huntSpeedMultiplier = 1.1;
+    }
+
+    update(playerFish) {
+        if (!playerFish) return;
+        const target = getTailPosition(playerFish, 1.1);
+        let desiredAngle = Math.atan2(target.y - this.y, target.x - this.x);
+        desiredAngle = Math.atan2(Math.sin(desiredAngle), Math.cos(desiredAngle));
+        let angleDiff = desiredAngle - this.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        if (Math.abs(angleDiff) > this.turnRate) {
+            this.angle += Math.sign(angleDiff) * this.turnRate;
+        } else {
+            this.angle = desiredAngle;
+        }
+        const finalSpeed = this.baseSpeed * this.huntSpeedMultiplier;
+        this.x += Math.cos(this.angle) * finalSpeed;
+        this.y += Math.sin(this.angle) * finalSpeed;
+        this.x = Math.max(this.size * 0.7, Math.min(canvasWidth - this.size * 0.7, this.x));
+        this.y = Math.max(this.size * 0.7, Math.min(canvasHeight - this.size * 0.7, this.y));
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+
+        const bodyLength = this.size * 1.6;
+        const bodyHeight = this.size * 0.7;
+        const tailWidth = this.size * 0.9;
+
+        ctx.beginPath();
+        ctx.ellipse(0, 0, bodyLength * 0.5, bodyHeight * 0.6, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#6da9d2';
+        ctx.fill();
+
+        ctx.save();
+        this.tailAngleOffset = Math.sin(this.tailAnimationPhase + tailAnimationCounter * tailAnimationSpeed) * tailMaxAngleOffset * 0.6;
+        ctx.rotate(this.tailAngleOffset);
+        ctx.beginPath();
+        ctx.moveTo(-bodyLength * 0.45, 0);
+        ctx.lineTo(-bodyLength * 0.45 - tailWidth * 0.6, -bodyHeight * 0.55);
+        ctx.lineTo(-bodyLength * 0.45 - tailWidth * 0.6, bodyHeight * 0.55);
+        ctx.closePath();
+        ctx.fillStyle = '#5c8db3';
+        ctx.fill();
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.moveTo(0, -bodyHeight * 0.6);
+        ctx.lineTo(-bodyLength * 0.05, -bodyHeight * 1.2);
+        ctx.lineTo(bodyLength * 0.1, -bodyHeight * 0.6);
+        ctx.closePath();
+        ctx.fillStyle = '#5c8db3';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(bodyLength * 0.35, 0);
+        ctx.lineTo(bodyLength * 0.48, -bodyHeight * 0.35);
+        ctx.lineTo(bodyLength * 0.6, 0);
+        ctx.fillStyle = '#aac9e1';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.ellipse(bodyLength * 0.3, 0, bodyLength * 0.18, bodyHeight * 0.6, 0, -Math.PI / 6, Math.PI / 6);
+        ctx.fillStyle = '#5c8db3';
+        ctx.fill();
+
+        const eyeX = bodyLength * 0.2;
+        const eyeY = -bodyHeight * 0.25;
+        const eyeRadius = this.size * 0.12;
+        ctx.beginPath();
+        ctx.arc(eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+        ctx.fillStyle = '#f0f5ff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(eyeX, eyeY, eyeRadius * 0.45, 0, Math.PI * 2);
+        ctx.fillStyle = '#12273d';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(bodyLength * 0.45, bodyHeight * 0.15);
+        ctx.lineTo(bodyLength * 0.58, bodyHeight * 0.18);
+        ctx.lineTo(bodyLength * 0.48, bodyHeight * 0.32);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        ctx.restore();
+    }
+}
+
 class Krill {
     constructor(x, y, size) {
         this.x = x;
@@ -309,24 +418,30 @@ class Jellyfish {
         ctx.save();
         ctx.translate(this.x, this.y);
 
-        const bodyRadius = this.size * 0.6;
-        const bodyHeight = this.size * 0.5;
+        const headRadius = this.size * 0.7;
+        const baseHeight = headRadius * 0.4;
 
         ctx.beginPath();
-        ctx.ellipse(0, -bodyHeight * 0.2, bodyRadius, bodyHeight, 0, Math.PI, 0, true);
-        ctx.fillStyle = 'rgba(200, 160, 255, 0.85)';
+        ctx.arc(0, 0, headRadius, Math.PI, 0, false);
+        ctx.lineTo(headRadius * 0.8, baseHeight);
+        ctx.quadraticCurveTo(0, baseHeight * 1.2, -headRadius * 0.8, baseHeight);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(200, 160, 255, 0.88)';
         ctx.fill();
 
-        ctx.strokeStyle = 'rgba(170, 130, 230, 0.7)';
-        ctx.lineWidth = Math.max(1.5, this.size * 0.08);
+        ctx.strokeStyle = 'rgba(170, 130, 230, 0.75)';
+        ctx.lineWidth = Math.max(1.4, this.size * 0.07);
         for (let i = 0; i < this.tentacleCount; i++) {
-            const angle = (-Math.PI / 2) + (i / (this.tentacleCount - 1)) * Math.PI;
-            const startX = Math.cos(angle) * bodyRadius * 0.7;
-            const controlX = startX + Math.cos(angle) * this.size * 0.2;
-            const endX = startX + Math.sin(angle) * this.size * 0.15;
+            const spread = (i - (this.tentacleCount - 1) / 2);
+            const startX = spread * headRadius * 0.18;
+            const startY = baseHeight * 0.9;
+            const controlX = startX * 0.6;
+            const controlY = baseHeight * 2.0;
+            const endX = startX * 0.8;
+            const endY = baseHeight * 2.8 + this.size * 0.6;
             ctx.beginPath();
-            ctx.moveTo(startX, bodyHeight * 0.1);
-            ctx.quadraticCurveTo(controlX, bodyHeight * 0.9, endX, bodyHeight * 1.6);
+            ctx.moveTo(startX, startY);
+            ctx.quadraticCurveTo(controlX, controlY, endX, endY);
             ctx.stroke();
         }
 
@@ -364,6 +479,20 @@ class PlayerFish extends Fish {
 function getRandomColor() { const h = Math.random()*360; const s = Math.random()*30+70; const l = Math.random()*20+60; return `hsl(${h}, ${s}%, ${l}%)`; }
 function getDistance(x1, y1, x2, y2) { let dx = x2-x1; let dy = y2-y1; return Math.sqrt(dx*dx + dy*dy); }
 
+function getHeadPosition(fish, distanceFactor = 1) {
+    return {
+        x: fish.x + Math.cos(fish.angle) * fish.size * distanceFactor,
+        y: fish.y + Math.sin(fish.angle) * fish.size * distanceFactor
+    };
+}
+
+function getTailPosition(fish, distanceFactor = 1) {
+    return {
+        x: fish.x - Math.cos(fish.angle) * fish.size * distanceFactor,
+        y: fish.y - Math.sin(fish.angle) * fish.size * distanceFactor
+    };
+}
+
 function createKrillConfig(config = {}) {
     return {
         initial: Math.max(0, config.initial ?? 8),
@@ -397,7 +526,7 @@ function spawnKrill() {
 }
 
 function maintainKrillPopulation() {
-    if (!activeKrillConfig || gameState !== 'running') return;
+    if (bossBattleActive || !activeKrillConfig || gameState !== 'running') return;
     if (krill.length < activeKrillConfig.min && krill.length < activeKrillConfig.max) {
         const spawned = spawnKrill();
         if (spawned) {
@@ -492,6 +621,8 @@ function showTemporaryMessage(text, duration = 2000) {
 
 function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false } = {}) {
     clearLevelTransitionTimer();
+    bossBattleActive = false;
+    bossShark = null;
     currentLevelIndex = Math.max(0, Math.min(levels.length - 1, levelIndex));
     const levelConfig = levels[currentLevelIndex];
 
@@ -573,10 +704,68 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
     showTemporaryMessage(`${levelConfig.name}: ${levelConfig.description}`);
 }
 
+function startBossBattle() {
+    console.log('Starting boss battle...');
+    clearLevelTransitionTimer();
+    bossBattleActive = true;
+    levelAllowsPursuit = true;
+    activeKrillConfig = null;
+    krill = [];
+    jellyfish = [];
+    otherFish = [];
+    baseSpeed = bossLevel.baseSpeed;
+
+    if (animationId) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+    }
+
+    const desiredPlayerSize = Math.max(player ? player.size : playerInitialSize, bossLevel.playerSize);
+    if (!player) {
+        player = new PlayerFish(canvasWidth / 3, canvasHeight / 2, desiredPlayerSize, 'orange');
+    }
+    player.size = desiredPlayerSize;
+    player.x = canvasWidth / 3;
+    player.y = canvasHeight / 2;
+    player.setTarget(player.x, player.y);
+
+    mouse.x = player.x;
+    mouse.y = player.y;
+
+    bossShark = new Shark(canvasWidth * 0.7, canvasHeight / 2, bossLevel.sharkSize, '#5fa3d7', bossLevel.sharkSpeedMultiplier);
+    otherFish.push(bossShark);
+
+    bubbles = [];
+    for (let i = 0; i < numBubbles; i++) {
+        bubbles.push(new Bubble());
+    }
+
+    gameState = 'running';
+    messageEl.textContent = '';
+    messageEl.style.display = 'none';
+    restartButton.style.display = 'none';
+
+    gameLoop();
+    showTemporaryMessage(`${bossLevel.name}: ${bossLevel.description}. ¡Muerde su cola antes de que alcance la tuya!`, 3500);
+}
+
 function handleLevelClear() {
     if (gameState !== 'running') return;
     if (currentLevelIndex >= levels.length - 1) {
-        winGame();
+        gameState = 'transition';
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+
+        messageEl.textContent = `¡${levels[currentLevelIndex].name} completado! Se acerca el jefe...`;
+        messageEl.style.display = 'block';
+        restartButton.style.display = 'none';
+
+        levelTransitionTimeout = setTimeout(() => {
+            messageEl.style.display = 'none';
+            startBossBattle();
+        }, 2300);
         return;
     }
 
@@ -598,6 +787,10 @@ function handleLevelClear() {
 
 function checkCollisions() {
     if (!player) return;
+    if (bossBattleActive) {
+        checkBossBattleCollisions();
+        return;
+    }
     if (jellyfish.length > 0) {
         for (let i = 0; i < jellyfish.length; i++) {
             const jelly = jellyfish[i];
@@ -640,6 +833,38 @@ function checkCollisions() {
     }
 }
 
+function checkBossBattleCollisions() {
+    if (!bossBattleActive || !bossShark || !player) return;
+    const playerHead = getHeadPosition(player, 1.1);
+    const playerTail = getTailPosition(player, 1.05);
+    const sharkHead = getHeadPosition(bossShark, 1.15);
+    const sharkTail = getTailPosition(bossShark, 1.2);
+    const biteRange = Math.max(player.size, bossShark.size) * bossLevel.biteRangeFactor;
+
+    if (getDistance(playerHead.x, playerHead.y, sharkTail.x, sharkTail.y) < biteRange) {
+        winBossBattle();
+        return;
+    }
+
+    if (getDistance(sharkHead.x, sharkHead.y, playerTail.x, playerTail.y) < biteRange) {
+        loseBossBattle();
+    }
+}
+
+function winBossBattle() {
+    bossBattleActive = false;
+    bossShark = null;
+    otherFish = [];
+    winGame('¡Venciste al tiburón! Eres el rey del océano.');
+}
+
+function loseBossBattle() {
+    bossBattleActive = false;
+    bossShark = null;
+    otherFish = [];
+    gameOver('¡El tiburón mordió tu cola! Inténtalo de nuevo.');
+}
+
 function updateGame() {
     if (gameState !== 'running' || !player) return;
     tailAnimationCounter++; // Incrementar el contador para la animación de la cola
@@ -664,25 +889,33 @@ function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight
     ctx.fillStyle = 'white';
     ctx.font = '16px Arial';
     ctx.fillText(`Tamaño: ${player.size.toFixed(1)}`, 10, 20);
-    ctx.fillText(`Peces restantes: ${otherFish.length}`, 10, 40);
-    if (activeKrillConfig) {
-        ctx.fillText(`Krill disponibles: ${krill.length}`, 10, 60);
-    }
-    if (jellyfish.length > 0) {
-        ctx.fillText(`Medusas: ${jellyfish.length}`, 10, 80);
-    }
-    const levelInfo = levels[currentLevelIndex];
-    if (levelInfo) {
-        let levelTextY = activeKrillConfig ? 80 : 60;
-        if (jellyfish.length > 0) {
-            levelTextY = 100;
+    let hudY = 40;
+    if (bossBattleActive) {
+        ctx.fillText('Duelo final: muerde la cola del tiburón', 10, hudY);
+        hudY += 20;
+        ctx.fillText('Protege tu cola y mantente en movimiento', 10, hudY);
+        hudY += 20;
+    } else {
+        ctx.fillText(`Peces restantes: ${otherFish.length}`, 10, hudY);
+        hudY += 20;
+        if (activeKrillConfig) {
+            ctx.fillText(`Krill disponibles: ${krill.length}`, 10, hudY);
+            hudY += 20;
         }
-        ctx.fillText(`Nivel: ${levelInfo.name}`, 10, levelTextY);
+        if (jellyfish.length > 0) {
+            ctx.fillText(`Medusas: ${jellyfish.length}`, 10, hudY);
+            hudY += 20;
+        }
+    }
+    const levelInfo = bossBattleActive ? bossLevel : levels[currentLevelIndex];
+    if (levelInfo) {
+        const label = bossBattleActive ? 'Desafío' : 'Nivel';
+        ctx.fillText(`${label}: ${levelInfo.name}`, 10, hudY);
     }
 }
 function gameLoop() { /* ... sin cambios ... */ if (gameState !== 'running') { if (animationId) { cancelAnimationFrame(animationId); animationId = null; } return; } updateGame(); drawGame(); animationId = requestAnimationFrame(gameLoop); }
-function gameOver() { /* ... sin cambios ... */ console.log("Game Over!"); clearLevelTransitionTimer(); gameState = 'gameOver'; messageEl.textContent = '¡HAS SIDO COMIDO! GAME OVER'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
-function winGame() { /* ... sin cambios ... */ console.log("You Win!"); clearLevelTransitionTimer(); gameState = 'win'; messageEl.textContent = '¡FELICIDADES! ¡TE LOS COMISTE A TODOS!'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
+function gameOver(customMessage) { /* ... sin cambios ... */ console.log("Game Over!"); clearLevelTransitionTimer(); gameState = 'gameOver'; messageEl.textContent = customMessage || '¡HAS SIDO COMIDO! GAME OVER'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
+function winGame(customMessage) { /* ... sin cambios ... */ console.log("You Win!"); clearLevelTransitionTimer(); gameState = 'win'; messageEl.textContent = customMessage || '¡FELICIDADES! ¡TE LOS COMISTE A TODOS!'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
 
 // --- Event Listeners (sin cambios respecto a la versión anterior funcional) ---
 window.addEventListener('resize', () => { if (animationId) { cancelAnimationFrame(animationId); animationId = null; } resizeCanvas(); });
