@@ -11,6 +11,7 @@ let mouse = { x: 0, y: 0 };
 let player;
 let otherFish = [];
 let krill = [];
+let jellyfish = [];
 let bubbles = [];
 let initialOtherFishCount = 25;
 let growthFactor = 0.50;
@@ -37,10 +38,10 @@ const levels = [
     },
     {
         name: 'Nivel 2',
-        description: 'Más peces y se mueven un poco más rápido.',
-        fishCount: 16,
-        baseSpeed: 0.85,
-        allowPursuit: false,
+        description: 'Más peces grandes comienzan a perseguirte.',
+        fishCount: 20,
+        baseSpeed: 0.9,
+        allowPursuit: true,
         krill: {
             initial: 10,
             min: 5,
@@ -52,9 +53,9 @@ const levels = [
     },
     {
         name: 'Nivel 3',
-        description: 'Muchos peces y los grandes te persiguen.',
-        fishCount: 24,
-        baseSpeed: 1.0,
+        description: 'Muchos peces, persecución y medusas peligrosas.',
+        fishCount: 28,
+        baseSpeed: 1.05,
         allowPursuit: true,
         krill: {
             initial: 8,
@@ -63,6 +64,11 @@ const levels = [
             respawnInterval: 6000,
             spawnBatch: 2,
             nutritionFactor: 0.65
+        },
+        jellyfish: {
+            count: 14,
+            minSize: 24,
+            maxSize: 36
         }
     }
 ];
@@ -203,9 +209,6 @@ class Krill {
         this.floatPhase = Math.random() * Math.PI * 2;
         this.driftSpeedX = (Math.random() - 0.5) * 0.1;
         this.driftSpeedY = (Math.random() - 0.5) * 0.05;
-        this.hue = Math.random() * 40 + 180;
-        this.saturation = Math.random() * 20 + 60;
-        this.lightness = Math.random() * 20 + 70;
         this.y = y;
     }
 
@@ -237,14 +240,96 @@ class Krill {
     draw() {
         ctx.save();
         ctx.translate(this.x, this.y);
+
+        const bodyWidth = this.size;
+        const bodyHeight = this.size * 0.7;
+
         ctx.beginPath();
-        ctx.ellipse(0, 0, this.size, this.size * 0.6, 0, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, 0.85)`;
+        ctx.ellipse(0, 0, bodyWidth, bodyHeight, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(220, 40, 40, 0.9)';
         ctx.fill();
+
         ctx.beginPath();
-        ctx.ellipse(-this.size * 0.3, 0, this.size * 0.5, this.size * 0.25, Math.PI / 6, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${this.hue + 20}, ${Math.min(100, this.saturation + 10)}%, ${Math.min(95, this.lightness + 5)}%, 0.6)`;
+        ctx.arc(bodyWidth * 0.2, -bodyHeight * 0.2, bodyHeight * 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 80, 80, 0.95)';
         ctx.fill();
+
+        const legCount = 4;
+        const legSpacing = (bodyWidth * 1.6) / (legCount - 1);
+        const startX = -bodyWidth * 0.8;
+        for (let i = 0; i < legCount; i++) {
+            const legX = startX + i * legSpacing;
+            ctx.beginPath();
+            ctx.moveTo(legX, bodyHeight * 0.5);
+            ctx.quadraticCurveTo(
+                legX + bodyWidth * 0.05,
+                bodyHeight * 1.0,
+                legX + bodyWidth * 0.1,
+                bodyHeight * 1.5
+            );
+            ctx.strokeStyle = 'rgba(180, 20, 20, 0.9)';
+            ctx.lineWidth = Math.max(1, this.size * 0.12);
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+}
+
+class Jellyfish {
+    constructor(x, y, size) {
+        this.x = x;
+        this.baseY = y;
+        this.size = size;
+        this.floatAmplitude = Math.random() * 12 + 10;
+        this.floatSpeed = Math.random() * 0.01 + 0.008;
+        this.floatPhase = Math.random() * Math.PI * 2;
+        this.driftSpeedX = (Math.random() - 0.5) * 0.15;
+        this.y = y;
+        this.tentacleCount = 6 + Math.floor(Math.random() * 4);
+    }
+
+    update() {
+        this.floatPhase += this.floatSpeed;
+        const floatOffset = Math.sin(this.floatPhase) * this.floatAmplitude;
+        this.x += this.driftSpeedX;
+
+        if (this.x < this.size) {
+            this.x = this.size;
+            this.driftSpeedX *= -1;
+        } else if (this.x > canvasWidth - this.size) {
+            this.x = canvasWidth - this.size;
+            this.driftSpeedX *= -1;
+        }
+
+        this.y = this.baseY + floatOffset;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        const bodyRadius = this.size * 0.6;
+        const bodyHeight = this.size * 0.5;
+
+        ctx.beginPath();
+        ctx.ellipse(0, -bodyHeight * 0.2, bodyRadius, bodyHeight, 0, Math.PI, 0, true);
+        ctx.fillStyle = 'rgba(200, 160, 255, 0.85)';
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(170, 130, 230, 0.7)';
+        ctx.lineWidth = Math.max(1.5, this.size * 0.08);
+        for (let i = 0; i < this.tentacleCount; i++) {
+            const angle = (-Math.PI / 2) + (i / (this.tentacleCount - 1)) * Math.PI;
+            const startX = Math.cos(angle) * bodyRadius * 0.7;
+            const controlX = startX + Math.cos(angle) * this.size * 0.2;
+            const endX = startX + Math.sin(angle) * this.size * 0.15;
+            ctx.beginPath();
+            ctx.moveTo(startX, bodyHeight * 0.1);
+            ctx.quadraticCurveTo(controlX, bodyHeight * 0.9, endX, bodyHeight * 1.6);
+            ctx.stroke();
+        }
+
         ctx.restore();
     }
 }
@@ -337,6 +422,22 @@ function maintainKrillPopulation() {
     }
 }
 
+function spawnJellyfish(count, minSize, maxSize) {
+    jellyfish = [];
+    let attempts = 0;
+    while (jellyfish.length < count && attempts < count * 10) {
+        const size = Math.random() * (maxSize - minSize) + minSize;
+        const x = Math.random() * (canvasWidth - size * 2) + size;
+        const y = Math.random() * (canvasHeight - size * 2) + size;
+        const tooCloseToPlayer = player && getDistance(x, y, player.x, player.y) < player.size + size + 80;
+        const tooCloseToOthers = jellyfish.some(existing => getDistance(x, y, existing.x, existing.y) < existing.size + size + 40);
+        if (!tooCloseToPlayer && !tooCloseToOthers) {
+            jellyfish.push(new Jellyfish(x, y, size));
+        }
+        attempts++;
+    }
+}
+
 // --- Función para redimensionar el canvas (MODIFICADA para margen inferior) ---
 function resizeCanvas() {
     canvas.width = window.innerWidth;
@@ -425,6 +526,7 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
 
     otherFish = [];
     krill = [];
+    jellyfish = [];
     activeKrillConfig = createKrillConfig(levelConfig.krill || {});
     lastKrillSpawnTime = Date.now();
     for (let i = 0; i < initialOtherFishCount; i++) {
@@ -446,6 +548,15 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
         }
     }
     console.log(`Created ${krill.length} krill.`);
+
+    if (levelConfig.jellyfish && levelConfig.jellyfish.count > 0) {
+        spawnJellyfish(
+            levelConfig.jellyfish.count,
+            levelConfig.jellyfish.minSize || 20,
+            levelConfig.jellyfish.maxSize || 32
+        );
+        console.log(`Created ${jellyfish.length} jellyfish.`);
+    }
 
     bubbles = [];
     for (let i = 0; i < numBubbles; i++) {
@@ -481,12 +592,22 @@ function handleLevelClear() {
 
     levelTransitionTimeout = setTimeout(() => {
         messageEl.style.display = 'none';
-        startLevel(currentLevelIndex + 1);
+        startLevel(currentLevelIndex + 1, { resetPlayerSize: true });
     }, 2000);
 }
 
 function checkCollisions() {
     if (!player) return;
+    if (jellyfish.length > 0) {
+        for (let i = 0; i < jellyfish.length; i++) {
+            const jelly = jellyfish[i];
+            const dist = getDistance(player.x, player.y, jelly.x, jelly.y);
+            if (dist < player.size + jelly.size * 0.4) {
+                gameOver();
+                return;
+            }
+        }
+    }
     if (activeKrillConfig) {
         for (let i = krill.length - 1; i >= 0; i--) {
             const item = krill[i];
@@ -524,6 +645,7 @@ function updateGame() {
     tailAnimationCounter++; // Incrementar el contador para la animación de la cola
     bubbles.forEach(b => b.update());
     krill.forEach(k => k.update());
+    jellyfish.forEach(j => j.update());
     maintainKrillPopulation();
     player.update();
     otherFish.forEach(f => f.update(player)); // Pasar player para la IA
@@ -536,6 +658,7 @@ function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     bubbles.forEach(b => b.draw());
     krill.forEach(k => k.draw());
+    jellyfish.forEach(j => j.draw());
     otherFish.forEach(f => f.draw());
     player.draw();
     ctx.fillStyle = 'white';
@@ -545,9 +668,15 @@ function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight
     if (activeKrillConfig) {
         ctx.fillText(`Krill disponibles: ${krill.length}`, 10, 60);
     }
+    if (jellyfish.length > 0) {
+        ctx.fillText(`Medusas: ${jellyfish.length}`, 10, 80);
+    }
     const levelInfo = levels[currentLevelIndex];
     if (levelInfo) {
-        const levelTextY = activeKrillConfig ? 80 : 60;
+        let levelTextY = activeKrillConfig ? 80 : 60;
+        if (jellyfish.length > 0) {
+            levelTextY = 100;
+        }
         ctx.fillText(`Nivel: ${levelInfo.name}`, 10, levelTextY);
     }
 }
