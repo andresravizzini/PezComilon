@@ -12,6 +12,7 @@ let player;
 let otherFish = [];
 let krill = [];
 let jellyfish = [];
+let mines = [];
 let bubbles = [];
 let initialOtherFishCount = 25;
 let growthFactor = 0.50;
@@ -75,12 +76,25 @@ const levels = [
 
 const bossLevel = {
     name: 'Nivel Final',
-    description: 'Duelo 1 vs 1 contra el tiburón jefe.',
+    description: 'Activa minas y hazlas explotar cerca del tiburón.',
     playerSize: 55,
-    sharkSize: 50,
-    baseSpeed: 1.0,
-    sharkSpeedMultiplier: 1.25,
-    biteRangeFactor: 0.5
+    sharkSize: 90,
+    baseSpeed: 1.1,
+    sharkSpeedMultiplier: 1.45,
+    sharkHealth: 3,
+    mines: {
+        initial: 4,
+        min: 3,
+        max: 6,
+        respawnInterval: 5000,
+        spawnBatch: 1,
+        minSize: 18,
+        maxSize: 26,
+        idleLifetime: 12000,
+        explosionDelay: 3000,
+        explosionDuration: 900,
+        explosionRadiusFactor: 3.2
+    }
 };
 
 let currentLevelIndex = 0;
@@ -91,6 +105,8 @@ let lastKrillSpawnTime = 0;
 const playerInitialSize = 15;
 let bossBattleActive = false;
 let bossShark = null;
+let activeMineConfig = null;
+let lastMineSpawnTime = 0;
 
 // --- Constantes para IA y Movimiento ---
 const visionRadius = 160;
@@ -212,16 +228,20 @@ class Fish {
 }
 
 class Shark extends Fish {
-    constructor(x, y, size, color, speedMultiplier = 1.2) {
+    constructor(x, y, size, color, speedMultiplier = 1.2, maxHealth = 3) {
         super(x, y, size, color, speedMultiplier);
         this.baseSpeed = baseSpeed * speedMultiplier;
-        this.turnRate = turnSpeedFleePursue * 1.1;
-        this.huntSpeedMultiplier = 1.1;
+        this.turnRate = turnSpeedFleePursue * 1.3;
+        this.huntSpeedMultiplier = 1.3;
+        this.maxHealth = Math.max(1, maxHealth);
+        this.health = this.maxHealth;
+        this.lastDamageTime = 0;
+        this.damageCooldown = 250;
     }
 
     update(playerFish) {
         if (!playerFish) return;
-        const target = getTailPosition(playerFish, 1.1);
+        const target = { x: playerFish.x, y: playerFish.y };
         let desiredAngle = Math.atan2(target.y - this.y, target.x - this.x);
         desiredAngle = Math.atan2(Math.sin(desiredAngle), Math.cos(desiredAngle));
         let angleDiff = desiredAngle - this.angle;
@@ -235,8 +255,22 @@ class Shark extends Fish {
         const finalSpeed = this.baseSpeed * this.huntSpeedMultiplier;
         this.x += Math.cos(this.angle) * finalSpeed;
         this.y += Math.sin(this.angle) * finalSpeed;
-        this.x = Math.max(this.size * 0.7, Math.min(canvasWidth - this.size * 0.7, this.x));
-        this.y = Math.max(this.size * 0.7, Math.min(canvasHeight - this.size * 0.7, this.y));
+        this.x = Math.max(this.size * 0.75, Math.min(canvasWidth - this.size * 0.75, this.x));
+        this.y = Math.max(this.size * 0.75, Math.min(canvasHeight - this.size * 0.75, this.y));
+    }
+
+    takeDamage(amount = 1) {
+        const now = Date.now();
+        if (now - this.lastDamageTime < this.damageCooldown) {
+            return false;
+        }
+        this.lastDamageTime = now;
+        this.health = Math.max(0, this.health - amount);
+        return this.health <= 0;
+    }
+
+    getHealthRatio() {
+        return this.maxHealth > 0 ? this.health / this.maxHealth : 0;
     }
 
     draw() {
@@ -244,50 +278,53 @@ class Shark extends Fish {
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
 
-        const bodyLength = this.size * 1.6;
-        const bodyHeight = this.size * 0.7;
-        const tailWidth = this.size * 0.9;
+        const bodyLength = this.size * 1.8;
+        const bodyHeight = this.size * 0.75;
+        const tailWidth = this.size;
+        const healthRatio = this.getHealthRatio();
+        const bodyColor = healthRatio < 1 ? `rgba(109, 169, 210, ${0.7 + 0.3 * healthRatio})` : '#6da9d2';
+        const accentColor = '#5c8db3';
 
         ctx.beginPath();
         ctx.ellipse(0, 0, bodyLength * 0.5, bodyHeight * 0.6, 0, 0, Math.PI * 2);
-        ctx.fillStyle = '#6da9d2';
+        ctx.fillStyle = bodyColor;
         ctx.fill();
 
         ctx.save();
-        this.tailAngleOffset = Math.sin(this.tailAnimationPhase + tailAnimationCounter * tailAnimationSpeed) * tailMaxAngleOffset * 0.6;
+        this.tailAngleOffset = Math.sin(this.tailAnimationPhase + tailAnimationCounter * tailAnimationSpeed) * tailMaxAngleOffset * 0.65;
         ctx.rotate(this.tailAngleOffset);
         ctx.beginPath();
         ctx.moveTo(-bodyLength * 0.45, 0);
-        ctx.lineTo(-bodyLength * 0.45 - tailWidth * 0.6, -bodyHeight * 0.55);
-        ctx.lineTo(-bodyLength * 0.45 - tailWidth * 0.6, bodyHeight * 0.55);
+        ctx.lineTo(-bodyLength * 0.45 - tailWidth * 0.6, -bodyHeight * 0.6);
+        ctx.lineTo(-bodyLength * 0.45 - tailWidth * 0.6, bodyHeight * 0.6);
         ctx.closePath();
-        ctx.fillStyle = '#5c8db3';
+        ctx.fillStyle = accentColor;
         ctx.fill();
         ctx.restore();
 
         ctx.beginPath();
-        ctx.moveTo(0, -bodyHeight * 0.6);
-        ctx.lineTo(-bodyLength * 0.05, -bodyHeight * 1.2);
-        ctx.lineTo(bodyLength * 0.1, -bodyHeight * 0.6);
+        ctx.moveTo(0, -bodyHeight * 0.65);
+        ctx.lineTo(-bodyLength * 0.08, -bodyHeight * 1.25);
+        ctx.lineTo(bodyLength * 0.12, -bodyHeight * 0.65);
         ctx.closePath();
-        ctx.fillStyle = '#5c8db3';
+        ctx.fillStyle = accentColor;
         ctx.fill();
 
         ctx.beginPath();
-        ctx.moveTo(bodyLength * 0.35, 0);
-        ctx.lineTo(bodyLength * 0.48, -bodyHeight * 0.35);
-        ctx.lineTo(bodyLength * 0.6, 0);
+        ctx.moveTo(bodyLength * 0.38, 0);
+        ctx.lineTo(bodyLength * 0.53, -bodyHeight * 0.35);
+        ctx.lineTo(bodyLength * 0.65, 0);
         ctx.fillStyle = '#aac9e1';
         ctx.fill();
 
         ctx.beginPath();
-        ctx.ellipse(bodyLength * 0.3, 0, bodyLength * 0.18, bodyHeight * 0.6, 0, -Math.PI / 6, Math.PI / 6);
-        ctx.fillStyle = '#5c8db3';
+        ctx.ellipse(bodyLength * 0.32, 0, bodyLength * 0.2, bodyHeight * 0.65, 0, -Math.PI / 7, Math.PI / 7);
+        ctx.fillStyle = accentColor;
         ctx.fill();
 
-        const eyeX = bodyLength * 0.2;
-        const eyeY = -bodyHeight * 0.25;
-        const eyeRadius = this.size * 0.12;
+        const eyeX = bodyLength * 0.22;
+        const eyeY = -bodyHeight * 0.28;
+        const eyeRadius = this.size * 0.13;
         ctx.beginPath();
         ctx.arc(eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
         ctx.fillStyle = '#f0f5ff';
@@ -298,9 +335,9 @@ class Shark extends Fish {
         ctx.fill();
 
         ctx.beginPath();
-        ctx.moveTo(bodyLength * 0.45, bodyHeight * 0.15);
-        ctx.lineTo(bodyLength * 0.58, bodyHeight * 0.18);
-        ctx.lineTo(bodyLength * 0.48, bodyHeight * 0.32);
+        ctx.moveTo(bodyLength * 0.47, bodyHeight * 0.18);
+        ctx.lineTo(bodyLength * 0.63, bodyHeight * 0.22);
+        ctx.lineTo(bodyLength * 0.5, bodyHeight * 0.38);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
 
@@ -504,6 +541,24 @@ function createKrillConfig(config = {}) {
     };
 }
 
+function createMineConfig(config = {}) {
+    const minSize = Math.max(8, config.minSize ?? 16);
+    const maxSize = Math.max(minSize, config.maxSize ?? 24);
+    return {
+        initial: Math.max(0, config.initial ?? 3),
+        min: Math.max(0, config.min ?? 2),
+        max: Math.max(config.max ?? 5, config.min ?? 2, config.initial ?? 3),
+        respawnInterval: Math.max(1000, config.respawnInterval ?? 5000),
+        spawnBatch: Math.max(1, config.spawnBatch ?? 1),
+        minSize,
+        maxSize,
+        idleLifetime: Math.max(2000, config.idleLifetime ?? 10000),
+        explosionDelay: Math.max(500, config.explosionDelay ?? 3000),
+        explosionDuration: Math.max(200, config.explosionDuration ?? 900),
+        explosionRadiusFactor: Math.max(1.5, config.explosionRadiusFactor ?? 3.0)
+    };
+}
+
 function spawnKrill() {
     if (!activeKrillConfig || !canvasWidth || !canvasHeight) return null;
     if (krill.length >= activeKrillConfig.max) return null;
@@ -548,6 +603,181 @@ function maintainKrillPopulation() {
         if (spawnedAny) {
             lastKrillSpawnTime = now;
         }
+    }
+}
+
+function spawnMine() {
+    if (!activeMineConfig || !canvasWidth || !canvasHeight) return null;
+    if (mines.length >= activeMineConfig.max) return null;
+    let attempts = 0;
+    while (attempts < 30) {
+        const size = Math.random() * (activeMineConfig.maxSize - activeMineConfig.minSize) + activeMineConfig.minSize;
+        const x = Math.random() * (canvasWidth - size * 2) + size;
+        const y = Math.random() * (canvasHeight - size * 2) + size;
+        const tooCloseToPlayer = player && getDistance(x, y, player.x, player.y) < player.size + size + 80;
+        const tooCloseToShark = bossShark && getDistance(x, y, bossShark.x, bossShark.y) < bossShark.size + size + 120;
+        const tooCloseToMine = mines.some(existing => getDistance(x, y, existing.x, existing.y) < (existing.size + size) * 1.3);
+        if (!tooCloseToPlayer && !tooCloseToShark && !tooCloseToMine) {
+            const mine = new Mine(x, y, size, activeMineConfig);
+            mines.push(mine);
+            return mine;
+        }
+        attempts++;
+    }
+    return null;
+}
+
+function maintainMinePopulation() {
+    if (!bossBattleActive || !activeMineConfig || gameState !== 'running') return;
+    mines = mines.filter(mine => !mine.isExpired());
+    if (mines.length < activeMineConfig.min) {
+        let spawnedAny = false;
+        while (mines.length < activeMineConfig.min && mines.length < activeMineConfig.max) {
+            const spawned = spawnMine();
+            if (!spawned) break;
+            spawnedAny = true;
+        }
+        if (spawnedAny) {
+            lastMineSpawnTime = Date.now();
+        }
+        return;
+    }
+    if (mines.length >= activeMineConfig.max) return;
+    const now = Date.now();
+    if (now - lastMineSpawnTime >= activeMineConfig.respawnInterval) {
+        const batch = Math.min(activeMineConfig.spawnBatch, activeMineConfig.max - mines.length);
+        let spawnedAny = false;
+        for (let i = 0; i < batch; i++) {
+            const spawned = spawnMine();
+            if (spawned) {
+                spawnedAny = true;
+            }
+        }
+        if (spawnedAny) {
+            lastMineSpawnTime = now;
+        }
+    }
+}
+
+class Mine {
+    constructor(x, y, size, config = {}) {
+        this.x = x;
+        this.y = y;
+        this.baseY = y;
+        this.size = size;
+        this.config = config;
+        this.state = 'idle';
+        this.spawnTime = Date.now();
+        this.triggerTime = 0;
+        this.explosionStart = 0;
+        this.floatPhase = Math.random() * Math.PI * 2;
+        this.floatSpeed = Math.random() * 0.015 + 0.01;
+        this.floatAmplitude = Math.random() * 6 + 4;
+        this.driftSpeedX = (Math.random() - 0.5) * 0.08;
+        this.explosionRadius = size * (config.explosionRadiusFactor ?? 3.2);
+        this.idleLifetime = Math.max(2000, config.idleLifetime ?? 10000);
+        this.explosionDelay = Math.max(500, config.explosionDelay ?? 3000);
+        this.explosionDuration = Math.max(200, config.explosionDuration ?? 900);
+        this.hasDamagedShark = false;
+    }
+
+    update() {
+        const now = Date.now();
+        this.floatPhase += this.floatSpeed;
+        this.y = this.baseY + Math.sin(this.floatPhase) * this.floatAmplitude;
+        this.x += this.driftSpeedX;
+        if (this.x < this.size * 0.8 || this.x > canvasWidth - this.size * 0.8) {
+            this.driftSpeedX *= -1;
+            this.x = Math.max(this.size * 0.8, Math.min(canvasWidth - this.size * 0.8, this.x));
+        }
+
+        if (this.state === 'idle' && now - this.spawnTime >= this.idleLifetime) {
+            this.state = 'spent';
+        } else if (this.state === 'armed' && now - this.triggerTime >= this.explosionDelay) {
+            this.state = 'exploding';
+            this.explosionStart = now;
+            this.hasDamagedShark = false;
+        } else if (this.state === 'exploding' && now - this.explosionStart >= this.explosionDuration) {
+            this.state = 'spent';
+        }
+    }
+
+    arm() {
+        if (this.state === 'idle') {
+            this.state = 'armed';
+            this.triggerTime = Date.now();
+        }
+    }
+
+    getExplosionRadius() {
+        return this.explosionRadius;
+    }
+
+    isExpired() {
+        return this.state === 'spent';
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        if (this.state === 'exploding') {
+            const elapsed = Date.now() - this.explosionStart;
+            const progress = Math.min(1, elapsed / this.explosionDuration);
+            const radius = this.explosionRadius * (0.7 + 0.3 * progress);
+            const alpha = 0.7 - 0.5 * progress;
+            const gradient = ctx.createRadialGradient(0, 0, this.size * 0.2, 0, 0, radius);
+            gradient.addColorStop(0, `rgba(255, 220, 120, ${alpha})`);
+            gradient.addColorStop(0.4, `rgba(255, 120, 0, ${alpha * 0.8})`);
+            gradient.addColorStop(1, 'rgba(40, 0, 0, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            return;
+        }
+
+        const spikes = 8;
+        const spikeLength = this.size * 0.65;
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = this.size * 0.15;
+        for (let i = 0; i < spikes; i++) {
+            const angle = (Math.PI * 2 * i) / spikes;
+            const sx = Math.cos(angle) * (this.size * 0.6);
+            const sy = Math.sin(angle) * (this.size * 0.6);
+            const ex = Math.cos(angle) * (this.size * 0.6 + spikeLength);
+            const ey = Math.sin(angle) * (this.size * 0.6 + spikeLength);
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = '#0b0b0b';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size * 0.7, 0, Math.PI * 2);
+        ctx.fillStyle = '#1c1c1c';
+        ctx.fill();
+
+        if (this.state === 'armed') {
+            const pulse = 0.5 + Math.sin(Date.now() / 120) * 0.4;
+            ctx.beginPath();
+            ctx.arc(0, 0, this.size * 0.35, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 70, 70, ${0.5 + pulse * 0.5})`;
+            ctx.fill();
+        } else {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.size * 0.3, 0, Math.PI * 2);
+            ctx.fillStyle = '#050505';
+            ctx.fill();
+        }
+
+        ctx.restore();
     }
 }
 
@@ -623,6 +853,9 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
     clearLevelTransitionTimer();
     bossBattleActive = false;
     bossShark = null;
+    activeMineConfig = null;
+    lastMineSpawnTime = 0;
+    mines = [];
     currentLevelIndex = Math.max(0, Math.min(levels.length - 1, levelIndex));
     const levelConfig = levels[currentLevelIndex];
 
@@ -710,8 +943,11 @@ function startBossBattle() {
     bossBattleActive = true;
     levelAllowsPursuit = true;
     activeKrillConfig = null;
+    activeMineConfig = createMineConfig(bossLevel.mines || {});
+    lastMineSpawnTime = Date.now();
     krill = [];
     jellyfish = [];
+    mines = [];
     otherFish = [];
     baseSpeed = bossLevel.baseSpeed;
 
@@ -732,8 +968,21 @@ function startBossBattle() {
     mouse.x = player.x;
     mouse.y = player.y;
 
-    bossShark = new Shark(canvasWidth * 0.7, canvasHeight / 2, bossLevel.sharkSize, '#5fa3d7', bossLevel.sharkSpeedMultiplier);
+    bossShark = new Shark(
+        canvasWidth * 0.7,
+        canvasHeight / 2,
+        bossLevel.sharkSize,
+        '#5fa3d7',
+        bossLevel.sharkSpeedMultiplier,
+        bossLevel.sharkHealth
+    );
     otherFish.push(bossShark);
+
+    if (activeMineConfig.initial > 0) {
+        for (let i = 0; i < activeMineConfig.initial && mines.length < activeMineConfig.max; i++) {
+            spawnMine();
+        }
+    }
 
     bubbles = [];
     for (let i = 0; i < numBubbles; i++) {
@@ -746,7 +995,7 @@ function startBossBattle() {
     restartButton.style.display = 'none';
 
     gameLoop();
-    showTemporaryMessage(`${bossLevel.name}: ${bossLevel.description}. ¡Muerde su cola antes de que alcance la tuya!`, 3500);
+    showTemporaryMessage(`${bossLevel.name}: ${bossLevel.description}. ¡Haz que las minas exploten cerca del tiburón!`, 4200);
 }
 
 function handleLevelClear() {
@@ -758,7 +1007,7 @@ function handleLevelClear() {
             animationId = null;
         }
 
-        messageEl.textContent = `¡${levels[currentLevelIndex].name} completado! Se acerca el jefe...`;
+        messageEl.textContent = `¡${levels[currentLevelIndex].name} completado! Se acerca el tiburón gigante...`;
         messageEl.style.display = 'block';
         restartButton.style.display = 'none';
 
@@ -835,34 +1084,63 @@ function checkCollisions() {
 
 function checkBossBattleCollisions() {
     if (!bossBattleActive || !bossShark || !player) return;
-    const playerHead = getHeadPosition(player, 1.1);
-    const playerTail = getTailPosition(player, 1.05);
-    const sharkHead = getHeadPosition(bossShark, 1.15);
-    const sharkTail = getTailPosition(bossShark, 1.2);
-    const biteRange = Math.max(player.size, bossShark.size) * bossLevel.biteRangeFactor;
 
-    if (getDistance(playerHead.x, playerHead.y, sharkTail.x, sharkTail.y) < biteRange) {
-        winBossBattle();
+    const distanceToShark = getDistance(player.x, player.y, bossShark.x, bossShark.y);
+    const sharkBiteRange = (player.size + bossShark.size) * 0.5;
+    if (distanceToShark < sharkBiteRange) {
+        loseBossBattle('¡El tiburón te alcanzó! Mantente lejos y usa las minas.');
         return;
     }
 
-    if (getDistance(sharkHead.x, sharkHead.y, playerTail.x, playerTail.y) < biteRange) {
-        loseBossBattle();
+    for (let i = 0; i < mines.length; i++) {
+        const mine = mines[i];
+        const distToPlayer = getDistance(player.x, player.y, mine.x, mine.y);
+        if (mine.state === 'idle' && distToPlayer < player.size + mine.size * 0.6) {
+            mine.arm();
+        }
+
+        if (mine.state === 'exploding') {
+            const radius = mine.getExplosionRadius();
+            if (distToPlayer < radius) {
+                loseBossBattle('¡La explosión te alcanzó! Aléjate después de activar una mina.');
+                return;
+            }
+
+            if (!mine.hasDamagedShark) {
+                const distToShark = getDistance(bossShark.x, bossShark.y, mine.x, mine.y);
+                if (distToShark < radius) {
+                    mine.hasDamagedShark = true;
+                    const defeated = bossShark.takeDamage(1);
+                    if (defeated) {
+                        winBossBattle();
+                        return;
+                    } else {
+                        showTemporaryMessage('¡Impacto directo! El tiburón perdió vida.', 1400);
+                    }
+                }
+            }
+        }
     }
 }
 
 function winBossBattle() {
     bossBattleActive = false;
     bossShark = null;
+    activeMineConfig = null;
+    mines = [];
+    lastMineSpawnTime = 0;
     otherFish = [];
-    winGame('¡Venciste al tiburón! Eres el rey del océano.');
+    winGame('¡Venciste al tiburón! Las minas salvaron el día.');
 }
 
-function loseBossBattle() {
+function loseBossBattle(customMessage) {
     bossBattleActive = false;
     bossShark = null;
+    activeMineConfig = null;
+    mines = [];
+    lastMineSpawnTime = 0;
     otherFish = [];
-    gameOver('¡El tiburón mordió tu cola! Inténtalo de nuevo.');
+    gameOver(customMessage || '¡El tiburón te derrotó! Inténtalo de nuevo.');
 }
 
 function updateGame() {
@@ -871,7 +1149,12 @@ function updateGame() {
     bubbles.forEach(b => b.update());
     krill.forEach(k => k.update());
     jellyfish.forEach(j => j.update());
-    maintainKrillPopulation();
+    if (bossBattleActive) {
+        mines.forEach(m => m.update());
+        maintainMinePopulation();
+    } else {
+        maintainKrillPopulation();
+    }
     player.update();
     otherFish.forEach(f => f.update(player)); // Pasar player para la IA
     checkCollisions();
@@ -886,14 +1169,37 @@ function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight
     jellyfish.forEach(j => j.draw());
     otherFish.forEach(f => f.draw());
     player.draw();
+    mines.forEach(m => m.draw());
+
+    if (bossBattleActive && bossShark) {
+        const barMargin = 16;
+        const barHeight = 18;
+        const barWidth = canvasWidth - barMargin * 2;
+        const healthRatio = Math.max(0, Math.min(1, bossShark.getHealthRatio())) || 0;
+        ctx.fillStyle = 'rgba(5, 15, 35, 0.7)';
+        ctx.fillRect(barMargin, barMargin, barWidth, barHeight);
+        ctx.fillStyle = '#ff5a5a';
+        ctx.fillRect(barMargin + 2, barMargin + 2, (barWidth - 4) * healthRatio, barHeight - 4);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(barMargin, barMargin, barWidth, barHeight);
+        ctx.font = 'bold 16px Arial';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText('Vida del Tiburón', canvasWidth / 2, barMargin + barHeight - 5);
+        ctx.textAlign = 'left';
+    }
+
     ctx.fillStyle = 'white';
     ctx.font = '16px Arial';
     ctx.fillText(`Tamaño: ${player.size.toFixed(1)}`, 10, 20);
     let hudY = 40;
     if (bossBattleActive) {
-        ctx.fillText('Duelo final: muerde la cola del tiburón', 10, hudY);
+        ctx.fillText('Final: activa minas y aléjate antes de que exploten', 10, hudY);
         hudY += 20;
-        ctx.fillText('Protege tu cola y mantente en movimiento', 10, hudY);
+        ctx.fillText('Las explosiones cerca del tiburón le quitan vida', 10, hudY);
+        hudY += 20;
+        ctx.fillText(`Minas flotando: ${mines.length}`, 10, hudY);
         hudY += 20;
     } else {
         ctx.fillText(`Peces restantes: ${otherFish.length}`, 10, hudY);
