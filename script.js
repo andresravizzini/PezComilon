@@ -22,24 +22,25 @@ let gameState = 'running';
 
 // --- Configuración de niveles ---
 const levels = [
+
+//    {
+//        name: 'Nivel 1',
+//        description: 'Pocos peces y ninguno te persigue.',
+//        fishCount: 8,
+//        baseSpeed: 0.65,
+//        allowPursuit: false,
+//        krill: {
+//            initial: 12,
+//            min: 6,
+//            max: 14,
+//            respawnInterval: 4500,
+//            spawnBatch: 3,
+//            nutritionFactor: 0.9
+//        }
+//    },
     {
         name: 'Nivel 1',
-        description: 'Pocos peces y ninguno te persigue.',
-        fishCount: 8,
-        baseSpeed: 0.65,
-        allowPursuit: false,
-        krill: {
-            initial: 12,
-            min: 6,
-            max: 14,
-            respawnInterval: 4500,
-            spawnBatch: 3,
-            nutritionFactor: 0.9
-        }
-    },
-    {
-        name: 'Nivel 2',
-        description: 'Más peces grandes comienzan a perseguirte.',
+        description: 'Nuevo pez, sobrevive!',
         fishCount: 20,
         baseSpeed: 0.9,
         allowPursuit: true,
@@ -53,8 +54,8 @@ const levels = [
         }
     },
     {
-        name: 'Nivel 3',
-        description: 'Muchos peces, persecución y medusas peligrosas.',
+        name: 'Nivel 2',
+        description: 'Nivel 2. Suerte amigo!',
         fishCount: 28,
         baseSpeed: 1.05,
         allowPursuit: true,
@@ -67,7 +68,7 @@ const levels = [
             nutritionFactor: 0.65
         },
         jellyfish: {
-            count: 14,
+            count: 10,
             minSize: 24,
             maxSize: 36
         }
@@ -77,15 +78,15 @@ const levels = [
 const bossLevel = {
     name: 'Nivel Final',
     description: 'Activa minas y hazlas explotar cerca del tiburón.',
-    playerSize: 55,
+    playerSize: 30,
     sharkSize: 90,
     baseSpeed: 1.1,
-    sharkSpeedMultiplier: 1.45,
+    sharkSpeedMultiplier: 3.85,
     sharkHealth: 3,
     mines: {
-        initial: 4,
-        min: 3,
-        max: 6,
+        initial: 6,
+        min: 4,
+        max: 8,
         respawnInterval: 5000,
         spawnBatch: 1,
         minSize: 18,
