@@ -18,7 +18,7 @@ let initialOtherFishCount = 25;
 let growthFactor = 0.50;
 let baseSpeed = 0.8;
 let animationId;
-let gameState = 'running';
+let gameState = 'levelSelect';
 
 // --- Configuración de niveles ---
 const levels = [
@@ -108,6 +108,15 @@ let bossBattleActive = false;
 let bossShark = null;
 let activeMineConfig = null;
 let lastMineSpawnTime = 0;
+
+const totalLevelCount = levels.length + 1;
+const bossGlobalIndex = totalLevelCount - 1;
+let completedLevels = new Array(totalLevelCount).fill(false);
+let unlockedLevelCount = 1;
+let lastAttemptedLevelIndex = 0;
+let activeLevelGlobalIndex = 0;
+let levelCircleLayout = [];
+let progressInitialized = false;
 
 // --- Audio ---
 let audioContext = null;
@@ -736,6 +745,16 @@ class PlayerFish extends Fish {
             ctx.closePath();
             ctx.fill();
             ctx.restore();
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.cos(mouthAngle) * rx, Math.sin(mouthAngle) * ry);
+            ctx.ellipse(0, 0, rx, ry, 0, mouthAngle, -mouthAngle, true);
+            ctx.closePath();
+            ctx.fillStyle = '#000000';
+            ctx.fill();
+            ctx.restore();
         } else {
             ctx.beginPath();
             ctx.moveTo(this.size * 0.5, this.size * 0.08);
@@ -1098,11 +1117,26 @@ function initGame() {
         if (canvas.width === 0) canvas.width = canvasWidth;
         if (canvas.height === 0 || canvas.height === window.innerHeight) canvas.height = canvasHeight; // Ajustar si no se aplicó el margen
     }
-    currentLevelIndex = 0;
-    if (player) {
-        player = null;
+
+    if (!progressInitialized) {
+        completedLevels = new Array(totalLevelCount).fill(false);
+        unlockedLevelCount = 1;
+        lastAttemptedLevelIndex = 0;
+        activeLevelGlobalIndex = 0;
+        progressInitialized = true;
+    } else {
+        lastAttemptedLevelIndex = Math.min(lastAttemptedLevelIndex, totalLevelCount - 1);
     }
-    startLevel(currentLevelIndex, { resetPlayer: true, resetPlayerSize: true });
+
+    if (gameState === 'running') {
+        if (bossBattleActive) {
+            startBossBattle();
+        } else {
+            startLevel(currentLevelIndex, { resetPlayer: false, resetPlayerSize: false });
+        }
+    } else {
+        enterLevelSelect(lastAttemptedLevelIndex);
+    }
 }
 
 function clearLevelTransitionTimer() {
@@ -1110,6 +1144,55 @@ function clearLevelTransitionTimer() {
         clearTimeout(levelTransitionTimeout);
         levelTransitionTimeout = null;
     }
+}
+
+function isLevelUnlocked(index) {
+    return index >= 0 && index < unlockedLevelCount;
+}
+
+function markLevelCompleted(index) {
+    if (index < 0 || index >= totalLevelCount) return;
+    completedLevels[index] = true;
+    const nextUnlock = index + 2;
+    unlockedLevelCount = Math.min(totalLevelCount, Math.max(unlockedLevelCount, nextUnlock));
+}
+
+function getLevelNameByGlobalIndex(index) {
+    if (index === bossGlobalIndex) {
+        return bossLevel.name;
+    }
+    return levels[Math.max(0, Math.min(levels.length - 1, index))].name;
+}
+
+function enterLevelSelect(highlightIndex = null) {
+    clearLevelTransitionTimer();
+    bossBattleActive = false;
+    bossShark = null;
+    activeMineConfig = null;
+    activeKrillConfig = null;
+    levelAllowsPursuit = true;
+    otherFish = [];
+    krill = [];
+    jellyfish = [];
+    mines = [];
+    if (highlightIndex !== null && !Number.isNaN(highlightIndex)) {
+        lastAttemptedLevelIndex = Math.max(0, Math.min(totalLevelCount - 1, highlightIndex));
+    } else {
+        lastAttemptedLevelIndex = Math.max(0, Math.min(totalLevelCount - 1, lastAttemptedLevelIndex));
+    }
+    currentLevelIndex = Math.max(0, Math.min(levels.length - 1, lastAttemptedLevelIndex));
+    activeLevelGlobalIndex = lastAttemptedLevelIndex;
+    player = null;
+    gameState = 'levelSelect';
+    messageEl.style.display = 'none';
+    restartButton.style.display = 'none';
+    if (bubbles.length === 0) {
+        for (let i = 0; i < numBubbles; i++) {
+            bubbles.push(new Bubble());
+        }
+    }
+    startBackgroundMusic();
+    startAnimationLoop();
 }
 
 function showTemporaryMessage(text, duration = 2000) {
@@ -1134,6 +1217,9 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
     mines = [];
     currentLevelIndex = Math.max(0, Math.min(levels.length - 1, levelIndex));
     const levelConfig = levels[currentLevelIndex];
+
+    activeLevelGlobalIndex = currentLevelIndex;
+    lastAttemptedLevelIndex = activeLevelGlobalIndex;
 
     baseSpeed = levelConfig.baseSpeed;
     levelAllowsPursuit = levelConfig.allowPursuit;
@@ -1210,7 +1296,7 @@ function startLevel(levelIndex, { resetPlayer = false, resetPlayerSize = false }
     restartButton.style.display = 'none';
 
     startBackgroundMusic();
-    gameLoop();
+    startAnimationLoop();
     showTemporaryMessage(`${levelConfig.name}: ${levelConfig.description}`);
 }
 
@@ -1227,6 +1313,9 @@ function startBossBattle() {
     mines = [];
     otherFish = [];
     baseSpeed = bossLevel.baseSpeed;
+
+    activeLevelGlobalIndex = bossGlobalIndex;
+    lastAttemptedLevelIndex = bossGlobalIndex;
 
     if (animationId) {
         cancelAnimationFrame(animationId);
@@ -1272,43 +1361,32 @@ function startBossBattle() {
     restartButton.style.display = 'none';
 
     startBackgroundMusic();
-    gameLoop();
+    startAnimationLoop();
     showTemporaryMessage(`${bossLevel.name}: ${bossLevel.description}. ¡Haz que las minas exploten cerca del tiburón!`, 4200);
 }
 
 function handleLevelClear() {
     if (gameState !== 'running') return;
-    if (currentLevelIndex >= levels.length - 1) {
-        gameState = 'transition';
-        if (animationId) {
-            cancelAnimationFrame(animationId);
-            animationId = null;
-        }
 
-        messageEl.textContent = `¡${levels[currentLevelIndex].name} completado! Se acerca el tiburón gigante...`;
-        messageEl.style.display = 'block';
-        restartButton.style.display = 'none';
-
-        levelTransitionTimeout = setTimeout(() => {
-            messageEl.style.display = 'none';
-            startBossBattle();
-        }, 2300);
-        return;
-    }
-
+    markLevelCompleted(activeLevelGlobalIndex);
     gameState = 'transition';
     if (animationId) {
         cancelAnimationFrame(animationId);
         animationId = null;
     }
 
-    messageEl.textContent = `¡${levels[currentLevelIndex].name} completado!`;
+    const levelName = getLevelNameByGlobalIndex(activeLevelGlobalIndex);
+    messageEl.textContent = `¡${levelName} completado!`;
     messageEl.style.display = 'block';
     restartButton.style.display = 'none';
 
+    const nextHighlight = unlockedLevelCount > 0
+        ? Math.min(unlockedLevelCount - 1, activeLevelGlobalIndex + 1)
+        : 0;
+
     levelTransitionTimeout = setTimeout(() => {
         messageEl.style.display = 'none';
-        startLevel(currentLevelIndex + 1, { resetPlayerSize: true });
+        enterLevelSelect(nextHighlight);
     }, 2000);
 }
 
@@ -1408,6 +1486,7 @@ function winBossBattle() {
     mines = [];
     lastMineSpawnTime = 0;
     otherFish = [];
+    markLevelCompleted(bossGlobalIndex);
     winGame('¡Venciste al tiburón! Las minas salvaron el día.');
 }
 
@@ -1497,9 +1576,207 @@ function drawGame() { /* ... sin cambios en la estructura, pero usa canvasHeight
         ctx.fillText(`${label}: ${levelInfo.name}`, 10, hudY);
     }
 }
-function gameLoop() { /* ... sin cambios ... */ if (gameState !== 'running') { if (animationId) { cancelAnimationFrame(animationId); animationId = null; } return; } updateGame(); drawGame(); animationId = requestAnimationFrame(gameLoop); }
-function gameOver(customMessage) { /* ... sin cambios ... */ console.log("Game Over!"); clearLevelTransitionTimer(); gameState = 'gameOver'; messageEl.textContent = customMessage || '¡HAS SIDO COMIDO! GAME OVER'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
-function winGame(customMessage) { /* ... sin cambios ... */ console.log("You Win!"); clearLevelTransitionTimer(); gameState = 'win'; messageEl.textContent = customMessage || '¡FELICIDADES! ¡TE LOS COMISTE A TODOS!'; messageEl.style.display = 'block'; restartButton.style.display = 'block'; if (animationId) cancelAnimationFrame(animationId); animationId = null; }
+
+function drawLevelSelect() {
+    if (!canvasWidth || !canvasHeight) return;
+
+    ctx.fillStyle = '#002b45';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    if (bubbles.length === 0) {
+        for (let i = 0; i < numBubbles; i++) {
+            bubbles.push(new Bubble());
+        }
+    }
+
+    bubbles.forEach(b => b.update());
+    bubbles.forEach(b => b.draw());
+
+    ctx.fillStyle = 'rgba(0, 18, 36, 0.65)';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    const titleFont = Math.max(24, Math.round(Math.min(canvasWidth * 0.06, canvasHeight * 0.14)));
+    const subtitleFont = Math.max(16, Math.round(titleFont * 0.45));
+    const titleY = Math.max(titleFont + 10, canvasHeight * 0.18);
+    ctx.font = `bold ${titleFont}px Arial`;
+    ctx.fillText('Selecciona un nivel', canvasWidth / 2, titleY);
+    ctx.font = `${subtitleFont}px Arial`;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
+    ctx.fillText('Haz clic, toca o presiona 1-3 para comenzar', canvasWidth / 2, titleY + subtitleFont + 12);
+    ctx.restore();
+
+    const total = totalLevelCount;
+    if (total <= 0) return;
+
+    const availableWidth = Math.max(220, canvasWidth - 160);
+    const circleRadius = Math.max(32, Math.min(72, availableWidth / (total * 2.3)));
+    const gap = circleRadius * 0.75;
+    const contentWidth = total * circleRadius * 2 + (total - 1) * gap;
+    const startX = canvasWidth / 2 - contentWidth / 2 + circleRadius;
+    const centerY = canvasHeight * 0.55;
+    const highlightIndex = unlockedLevelCount > 0
+        ? Math.min(Math.max(0, lastAttemptedLevelIndex), unlockedLevelCount - 1)
+        : -1;
+
+    levelCircleLayout = [];
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    for (let i = 0; i < total; i++) {
+        const x = startX + i * (circleRadius * 2 + gap);
+        const unlocked = isLevelUnlocked(i);
+        const completed = completedLevels[i];
+        const isHighlighted = i === highlightIndex;
+        const baseColor = !unlocked ? 'rgba(255, 255, 255, 0.08)' : (completed ? '#36c072' : '#f7c94c');
+        const strokeColor = isHighlighted ? '#ffef5c' : (!unlocked ? 'rgba(255, 255, 255, 0.25)' : '#ffffff');
+        const strokeWidth = isHighlighted ? Math.max(4, circleRadius * 0.16) : Math.max(2, circleRadius * 0.08);
+
+        ctx.beginPath();
+        ctx.arc(x, centerY, circleRadius, 0, Math.PI * 2);
+        ctx.fillStyle = baseColor;
+        ctx.fill();
+        ctx.lineWidth = strokeWidth;
+        ctx.strokeStyle = strokeColor;
+        ctx.stroke();
+
+        ctx.textBaseline = 'middle';
+        ctx.font = `bold ${Math.round(circleRadius * 0.95)}px Arial`;
+        ctx.fillStyle = unlocked ? (completed ? '#0b2e14' : '#202020') : 'rgba(255, 255, 255, 0.32)';
+        ctx.fillText(String(i + 1), x, centerY);
+
+        if (completed) {
+            const badgeRadius = circleRadius * 0.26;
+            const badgeX = x + circleRadius * 0.55;
+            const badgeY = centerY - circleRadius * 0.62;
+            ctx.beginPath();
+            ctx.arc(badgeX, badgeY, badgeRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#1f7040';
+            ctx.fill();
+            ctx.font = `bold ${Math.round(badgeRadius * 1.3)}px Arial`;
+            ctx.fillStyle = '#c6ffd6';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('✓', badgeX, badgeY + badgeRadius * 0.05);
+        }
+
+        ctx.textBaseline = 'top';
+        const name = i === bossGlobalIndex ? bossLevel.name : levels[i].name;
+        ctx.font = `bold ${Math.max(14, Math.round(circleRadius * 0.38))}px Arial`;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(name, x, centerY + circleRadius + 14);
+        const status = completed ? 'Ganado' : unlocked ? 'Disponible' : 'Bloqueado';
+        ctx.font = `${Math.max(12, Math.round(circleRadius * 0.3))}px Arial`;
+        ctx.fillStyle = completed ? '#c0f7cf' : unlocked ? '#fff2ba' : 'rgba(255, 255, 255, 0.5)';
+        ctx.fillText(status, x, centerY + circleRadius + 14 + Math.max(18, Math.round(circleRadius * 0.45)));
+
+        levelCircleLayout.push({
+            index: i,
+            x,
+            y: centerY,
+            radius: circleRadius,
+            unlocked,
+            type: i === bossGlobalIndex ? 'boss' : 'level'
+        });
+    }
+    ctx.restore();
+}
+
+function handleLevelSelectionPointer(x, y) {
+    if (gameState !== 'levelSelect') return false;
+    for (let i = 0; i < levelCircleLayout.length; i++) {
+        const node = levelCircleLayout[i];
+        const dx = x - node.x;
+        const dy = y - node.y;
+        if (Math.hypot(dx, dy) <= node.radius) {
+            if (!node.unlocked) {
+                messageEl.textContent = 'Nivel bloqueado. ¡Completa los anteriores primero!';
+                messageEl.style.display = 'block';
+                restartButton.style.display = 'none';
+                setTimeout(() => {
+                    if (gameState === 'levelSelect') {
+                        messageEl.style.display = 'none';
+                    }
+                }, 1600);
+                return true;
+            }
+
+            lastAttemptedLevelIndex = node.index;
+            if (node.type === 'boss') {
+                startBossBattle();
+            } else {
+                startLevel(node.index, { resetPlayer: true, resetPlayerSize: true });
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+function startAnimationLoop() {
+    if (!animationId) {
+        animationId = requestAnimationFrame(gameLoop);
+    }
+}
+
+function gameLoop() {
+    animationId = null;
+    if (gameState === 'running') {
+        updateGame();
+        drawGame();
+        if (gameState === 'running') {
+            animationId = requestAnimationFrame(gameLoop);
+        }
+    } else if (gameState === 'levelSelect') {
+        drawLevelSelect();
+        animationId = requestAnimationFrame(gameLoop);
+    }
+}
+
+function gameOver(customMessage) {
+    console.log("Game Over!");
+    clearLevelTransitionTimer();
+    gameState = 'gameOver';
+    messageEl.textContent = customMessage || '¡HAS SIDO COMIDO! GAME OVER';
+    messageEl.style.display = 'block';
+    restartButton.style.display = 'none';
+    if (animationId) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+    }
+    const highlight = unlockedLevelCount > 0
+        ? Math.min(unlockedLevelCount - 1, lastAttemptedLevelIndex)
+        : 0;
+    setTimeout(() => {
+        if (gameState === 'gameOver') {
+            messageEl.style.display = 'none';
+            enterLevelSelect(highlight);
+        }
+    }, 2000);
+}
+
+function winGame(customMessage) {
+    console.log("You Win!");
+    clearLevelTransitionTimer();
+    gameState = 'win';
+    messageEl.textContent = customMessage || '¡FELICIDADES! ¡TE LOS COMISTE A TODOS!';
+    messageEl.style.display = 'block';
+    restartButton.style.display = 'none';
+    if (animationId) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+    }
+    const highlight = unlockedLevelCount > 0
+        ? Math.min(unlockedLevelCount - 1, bossGlobalIndex)
+        : 0;
+    setTimeout(() => {
+        if (gameState === 'win') {
+            messageEl.style.display = 'none';
+            enterLevelSelect(highlight);
+        }
+    }, 2600);
+}
 
 // --- Event Listeners (sin cambios respecto a la versión anterior funcional) ---
 window.addEventListener('resize', () => { if (animationId) { cancelAnimationFrame(animationId); animationId = null; } resizeCanvas(); });
@@ -1509,14 +1786,24 @@ if (isTouchDevice) {
     console.log("Touch device detected. Using touch controls.");
     canvas.addEventListener('touchstart', (event) => {
         handleUserAudioUnlock();
+        if (event.changedTouches.length === 0) return;
+        const rect = canvas.getBoundingClientRect();
+        const touch = event.changedTouches[0];
+        const x = touch.clientX - rect.left;
+        const y = touch.clientY - rect.top;
+
+        if (gameState === 'levelSelect') {
+            event.preventDefault();
+            handleLevelSelectionPointer(x, y);
+            return;
+        }
+
         if (gameState !== 'running' || !player) return;
         event.preventDefault();
-        if (touchIdentifier === null && event.changedTouches.length > 0) {
-            touchIdentifier = event.changedTouches[0].identifier;
-            const rect = canvas.getBoundingClientRect();
-            const touch = event.changedTouches[0];
-            mouse.x = touch.clientX - rect.left;
-            mouse.y = touch.clientY - rect.top;
+        if (touchIdentifier === null) {
+            touchIdentifier = touch.identifier;
+            mouse.x = x;
+            mouse.y = y;
             player.setTarget(mouse.x, mouse.y);
         }
     }, { passive: false });
@@ -1558,29 +1845,49 @@ if (isTouchDevice) {
     });
     canvas.addEventListener('mousedown', (event) => {
         handleUserAudioUnlock();
-        if (gameState !== 'running' || !player) return;
         const rect = canvas.getBoundingClientRect();
-        mouse.x = event.clientX - rect.left;
-        mouse.y = event.clientY - rect.top;
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        if (gameState === 'levelSelect') {
+            handleLevelSelectionPointer(x, y);
+            return;
+        }
+
+        if (gameState !== 'running' || !player) return;
+        mouse.x = x;
+        mouse.y = y;
         player.setTarget(mouse.x, mouse.y);
     });
 }
-restartButton.addEventListener('click', () => { handleUserAudioUnlock(); resizeCanvas(); });
+restartButton.addEventListener('click', () => {
+    handleUserAudioUnlock();
+    enterLevelSelect(lastAttemptedLevelIndex);
+});
 
 window.addEventListener('keydown', (event) => {
-    if (!['1', '2', '3'].includes(event.key)) {
+    const parsed = parseInt(event.key, 10);
+    if (Number.isNaN(parsed)) {
         return;
     }
+
+    const levelIndex = parsed - 1;
+    if (levelIndex < 0 || levelIndex >= totalLevelCount) {
+        return;
+    }
+
+    if (!isLevelUnlocked(levelIndex)) {
+        return;
+    }
+
     handleUserAudioUnlock();
     event.preventDefault();
 
-    if (event.key === '1') {
-        startLevel(0, { resetPlayer: true, resetPlayerSize: true });
-    } else if (event.key === '2') {
-        const targetIndex = Math.max(0, Math.min(1, levels.length - 1));
-        startLevel(targetIndex, { resetPlayer: true, resetPlayerSize: true });
-    } else if (event.key === '3') {
+    lastAttemptedLevelIndex = levelIndex;
+    if (levelIndex === bossGlobalIndex) {
         startBossBattle();
+    } else {
+        startLevel(levelIndex, { resetPlayer: true, resetPlayerSize: true });
     }
 });
 
